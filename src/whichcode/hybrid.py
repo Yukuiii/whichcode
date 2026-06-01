@@ -6,13 +6,14 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from whichcode.bm25 import BM25Index, build_bm25_index
+from whichcode.bm25 import BM25Index, build_bm25_index, extract_search_terms
 from whichcode.chunking import Chunk
 from whichcode.ranking_rules import (
     ParsedQuery,
     apply_path_prior,
     apply_relevance_rules,
     chunk_matches_query_filters,
+    name_match_bonus,
     parse_query,
 )
 from whichcode.types import SearchResult
@@ -34,6 +35,20 @@ _SYMBOL_QUERY_RE = re.compile(
 )
 _ALPHA_SYMBOL = 0.3
 _ALPHA_NATURAL_LANGUAGE = 0.5
+_SYMBOL_DEFINITION_KINDS = frozenset(
+    {"function", "method", "constructor", "class", "interface", "struct", "trait", "enum"}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ChannelWeights:
+    """Stores per-channel weights used during weighted reciprocal-rank fusion."""
+
+    content: float
+    vector: float
+    name: float
+    path: float
+    symbol: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,17 +85,29 @@ class HybridIndex:
             raise ValueError("alpha must be between 0.0 and 1.0")
 
         candidate_count = max(top_k * 10, _HYBRID_RECALL_CANDIDATES)
-        bm25_scores = _rrf_scores(self.bm25.search(search_query, top_k=candidate_count))
-        vector_scores = _rrf_scores(self.vector.search(search_query, top_k=candidate_count))
+        channel_weights = _resolve_channel_weights(search_query, alpha)
+        all_chunks = _index_chunks(self.bm25, self.vector)
+        channel_scores = _weighted_rrf_scores(
+            (
+                (
+                    channel_weights.content,
+                    _search_field(self.bm25, "search_content", search_query, candidate_count, "search"),
+                ),
+                (channel_weights.vector, self.vector.search(search_query, top_k=candidate_count)),
+                (channel_weights.name, _search_field(self.bm25, "search_name", search_query, candidate_count)),
+                (channel_weights.path, _search_field(self.bm25, "search_path", search_query, candidate_count)),
+                (channel_weights.symbol, _rank_symbol_definitions(all_chunks, parsed_query, candidate_count)),
+            )
+        )
         candidates = [
             chunk
-            for chunk in sorted({*bm25_scores, *vector_scores}, key=lambda chunk: (chunk.file_path, chunk.start_line))
+            for chunk in sorted(channel_scores, key=lambda chunk: (chunk.file_path, chunk.start_line))
             if chunk_matches_query_filters(chunk, parsed_query)
         ]
         combined_scores = {
             chunk: _apply_query_relevance(
                 chunk,
-                alpha_weight * vector_scores.get(chunk, 0.0) + (1.0 - alpha_weight) * bm25_scores.get(chunk, 0.0),
+                channel_scores.get(chunk, 0.0),
                 parsed_query,
                 alpha_weight,
             )
@@ -104,9 +131,84 @@ def build_hybrid_index(chunks: Sequence[Chunk], model: EmbeddingModel | None = N
     return HybridIndex.from_chunks(chunks, model=model)
 
 
-def _rrf_scores(results: Sequence[SearchResult]) -> dict[Chunk, float]:
-    """Convert ranked search results to reciprocal-rank-fusion scores."""
-    return {result.chunk: 1.0 / (_RRF_K + rank) for rank, result in enumerate(results, 1)}
+def _weighted_rrf_scores(channels: Sequence[tuple[float, Sequence[SearchResult]]]) -> dict[Chunk, float]:
+    """Combine ranked channel outputs with weighted reciprocal-rank fusion."""
+    scores: dict[Chunk, float] = {}
+    for weight, results in channels:
+        if weight <= 0.0:
+            continue
+        seen: set[Chunk] = set()
+        for rank, result in enumerate(results, 1):
+            if result.chunk in seen:
+                continue
+            seen.add(result.chunk)
+            scores[result.chunk] = scores.get(result.chunk, 0.0) + weight / (_RRF_K + rank)
+    return scores
+
+
+def _search_field(
+    index: object,
+    method_name: str,
+    query: str,
+    top_k: int,
+    fallback_name: str | None = None,
+) -> list[SearchResult]:
+    """Call a field-specific search method when the index supports it."""
+    method = getattr(index, method_name, None)
+    if callable(method):
+        return list(method(query, top_k=top_k))
+    if fallback_name is None:
+        return []
+    fallback = getattr(index, fallback_name, None)
+    if callable(fallback):
+        return list(fallback(query, top_k=top_k))
+    return []
+
+
+def _index_chunks(*indexes: object) -> tuple[Chunk, ...]:
+    """Return the first chunk collection exposed by one of the indexes."""
+    for index in indexes:
+        chunks = getattr(index, "chunks", None)
+        if chunks:
+            return tuple(chunks)
+    return ()
+
+
+def _rank_symbol_definitions(chunks: Sequence[Chunk], query: ParsedQuery, top_k: int) -> list[SearchResult]:
+    """Rank definition-like chunks by exact, prefix, and compound symbol matches."""
+    if top_k < 1 or not chunks:
+        return []
+
+    search_text = query.search_text
+    if not search_text.strip():
+        return []
+
+    query_terms = extract_search_terms(search_text, stems=False, include_stop_words=True)
+    scored: dict[Chunk, float] = {}
+    for chunk in chunks:
+        name_score = name_match_bonus(chunk.name or "", search_text)
+        if name_score <= 0.0:
+            continue
+        score = name_score + _definition_line_match_bonus(chunk, query_terms)
+        if chunk.kind.lower() in _SYMBOL_DEFINITION_KINDS:
+            score *= 1.2
+        else:
+            score *= 0.7
+        scored[chunk] = score
+
+    ranked = sorted(scored.items(), key=lambda item: item[1], reverse=True)[:top_k]
+    return [SearchResult(chunk=chunk, score=score) for chunk, score in ranked]
+
+
+def _definition_line_match_bonus(chunk: Chunk, query_terms: Sequence[str]) -> float:
+    """Return a small symbol-channel bonus for query terms in the definition line."""
+    if not query_terms or not chunk.content.strip():
+        return 0.0
+    first_line = chunk.content.lstrip().splitlines()[0].lower()
+    hits = sum(1 for term in query_terms if term in first_line)
+    if hits == 0:
+        return 0.0
+    return min(0.8, 0.2 * hits)
 
 
 def _resolve_alpha(query: str, alpha: float | None) -> float:
@@ -114,6 +216,22 @@ def _resolve_alpha(query: str, alpha: float | None) -> float:
     if alpha is not None:
         return alpha
     return _ALPHA_SYMBOL if _is_symbol_query(query) else _ALPHA_NATURAL_LANGUAGE
+
+
+def _resolve_channel_weights(query: str, alpha: float | None) -> _ChannelWeights:
+    """Return weighted-RRF channel weights for symbol or natural-language queries."""
+    if alpha is not None:
+        lexical_weight = 1.0 - alpha
+        return _ChannelWeights(
+            content=lexical_weight,
+            vector=alpha,
+            name=lexical_weight * 2.0,
+            path=lexical_weight * 2.5,
+            symbol=lexical_weight * 2.2,
+        )
+    if _is_symbol_query(query):
+        return _ChannelWeights(content=1.5, vector=0.4, name=2.5, path=1.2, symbol=2.5)
+    return _ChannelWeights(content=1.2, vector=1.0, name=1.0, path=1.0, symbol=0.8)
 
 
 def _is_symbol_query(query: str) -> bool:

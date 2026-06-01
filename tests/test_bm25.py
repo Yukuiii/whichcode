@@ -84,6 +84,18 @@ def test_bm25_search_uses_file_path_terms() -> None:
     assert results[0].chunk.file_path == "src/cache/store.py"
 
 
+def test_bm25_search_exposes_field_specific_scores() -> None:
+    """BM25Index should score content, name, and path fields independently."""
+    content_chunk = Chunk("def build_cache(): return value", "src/app.py", 1, 1, "function", name="build")
+    metadata_chunk = Chunk("return value", "src/click/types.py", 1, 1, "function", name="ParamType")
+    index = build_bm25_index([content_chunk, metadata_chunk])
+
+    assert index.search_content("build cache", top_k=1)[0].chunk == content_chunk
+    assert index.search_name("ParamType", top_k=1)[0].chunk == metadata_chunk
+    assert index.search_path("type", top_k=1)[0].chunk == metadata_chunk
+    assert index.search("ParamType", top_k=1)[0].chunk == metadata_chunk
+
+
 def test_bm25_search_returns_empty_for_blank_or_missing_queries() -> None:
     """BM25Index.search should return no results for empty or unmatched queries."""
     index = build_bm25_index([Chunk("def run(): pass", "src/app.py", 1, 1, "function")])

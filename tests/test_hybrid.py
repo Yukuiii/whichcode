@@ -212,3 +212,25 @@ def test_hybrid_search_applies_structured_filters() -> None:
     results = index.search("kind:class path:auth token", top_k=2, alpha=0.0)
 
     assert [result.chunk for result in results] == [class_chunk]
+
+
+def test_hybrid_search_recalls_path_only_candidates() -> None:
+    """HybridIndex.search should use the path field as an independent recall channel."""
+    target = Chunk("value = read()", "src/cache/store.py", 1, 1, "module")
+    fillers = [Chunk("cache cache cache", f"src/fillers/item_{index}.py", 1, 1, "function") for index in range(130)]
+    index = HybridIndex(bm25=build_bm25_index([target, *fillers]), vector=StaticSearchIndex([]))
+
+    results = index.search("cache", top_k=3, alpha=0.0)
+
+    assert target in [result.chunk for result in results]
+
+
+def test_hybrid_search_recalls_symbol_name_only_candidates() -> None:
+    """HybridIndex.search should use symbol names as an independent recall channel."""
+    target = Chunk("return value", "src/factory.py", 1, 1, "class", name="CacheBuilder")
+    fillers = [Chunk("CacheBuilder CacheBuilder", f"src/fillers/item_{index}.py", 1, 1, "function") for index in range(130)]
+    index = HybridIndex(bm25=build_bm25_index([target, *fillers]), vector=StaticSearchIndex([]))
+
+    results = index.search("CacheBuilder", top_k=3, alpha=0.0)
+
+    assert target in [result.chunk for result in results]

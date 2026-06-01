@@ -195,7 +195,7 @@ def name_match_bonus(chunk_name: str, query: str) -> float:
         ratio = len(query_compact) / max(len(name_compact), 1)
         return 0.55 + 0.55 * ratio
 
-    raw_terms = extract_search_terms(query, stems=False)
+    raw_terms = extract_search_terms(query, stems=False, include_stop_words=True)
     name_terms = set(tokenize(chunk_name))
     if len(raw_terms) > 1 and all(_term_matches_any(term, name_terms) for term in raw_terms):
         return 0.7
