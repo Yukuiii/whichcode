@@ -1,3 +1,10 @@
 # whichcode
 
-`whichcode` is the repository name and initial project entry point.
+`whichcode` is a minimal tree-sitter chunking prototype for code indexing.
+
+## Development
+
+```bash
+uv sync
+uv run pytest
+```
