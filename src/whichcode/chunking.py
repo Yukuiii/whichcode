@@ -70,6 +70,7 @@ class Chunk:
     kind: str = "file"
     name: str | None = None
     language: str | None = None
+    summary: str | None = None
 
     @property
     def location(self) -> str:

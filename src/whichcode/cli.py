@@ -7,6 +7,7 @@ import json
 from collections.abc import Sequence
 
 from whichcode.formatting import format_results
+from whichcode.reranker import create_default_reranker
 from whichcode.storage import load_or_build_hybrid_index
 
 DEFAULT_RESULT_COUNT = 10
@@ -21,5 +22,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     index = load_or_build_hybrid_index(args.path, rebuild=args.rebuild)
-    results = index.search(args.query, top_k=DEFAULT_RESULT_COUNT)
+    reranker = create_default_reranker(args.path)
+    results = index.search(args.query, top_k=DEFAULT_RESULT_COUNT, reranker=reranker)
     print(json.dumps(format_results(args.query, results), ensure_ascii=False, indent=2))

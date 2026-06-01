@@ -9,6 +9,7 @@ from pathlib import Path
 
 from whichcode.bm25 import BM25Index, build_bm25_index, extract_search_terms, tokenize
 from whichcode.chunking import Chunk
+from whichcode.reranker import LLM_RERANK_CANDIDATES, ResultReranker
 from whichcode.types import SearchResult
 from whichcode.vector import EmbeddingModel, VectorIndex, build_vector_index
 
@@ -50,6 +51,7 @@ class HybridIndex:
         top_k: int = 10,
         alpha: float = 0.5,
         penalize_paths: bool = True,
+        reranker: ResultReranker | None = None,
     ) -> list[SearchResult]:
         """Return hybrid-ranked chunks for a query."""
         if top_k < 1 or not query.strip():
@@ -78,7 +80,11 @@ class HybridIndex:
             for chunk in candidates
         ]
         combined.sort(key=lambda result: result.score, reverse=True)
-        return [result for result in combined[:top_k] if result.score > 0.0]
+        ranked = [result for result in combined if result.score > 0.0]
+        if reranker is None:
+            return ranked[:top_k]
+        rerank_count = max(top_k, LLM_RERANK_CANDIDATES)
+        return reranker.rerank(query, ranked[:rerank_count], top_k)
 
 
 def build_hybrid_index(chunks: Sequence[Chunk], model: EmbeddingModel | None = None) -> HybridIndex:

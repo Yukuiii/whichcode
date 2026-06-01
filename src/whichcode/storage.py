@@ -20,7 +20,7 @@ INDEX_DIR_NAME = ".whichcode"
 CHUNKS_FILE_NAME = "chunks.jsonl"
 VECTORS_FILE_NAME = "vectors.npy"
 METADATA_FILE_NAME = "metadata.json"
-INDEX_VERSION = 2
+INDEX_VERSION = 4
 
 
 def load_or_build_hybrid_index(
@@ -52,7 +52,7 @@ def index_exists(root: str | Path) -> bool:
         (index_path / file_name).exists()
         for file_name in (CHUNKS_FILE_NAME, VECTORS_FILE_NAME, METADATA_FILE_NAME)
     )
-    return required_files_exist and _metadata_version_is_current(index_path / METADATA_FILE_NAME)
+    return required_files_exist and _metadata_matches(index_path / METADATA_FILE_NAME)
 
 
 def save_chunks_and_vectors(
@@ -68,7 +68,13 @@ def save_chunks_and_vectors(
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_chunks(output_dir / CHUNKS_FILE_NAME, chunks)
     np.save(output_dir / VECTORS_FILE_NAME, np.asarray(vectors, dtype=np.float32))
-    _write_metadata(output_dir / METADATA_FILE_NAME, root_path, chunks, vectors, model_name)
+    _write_metadata(
+        output_dir / METADATA_FILE_NAME,
+        root_path,
+        chunks,
+        vectors,
+        model_name,
+    )
 
 
 def load_chunks_and_vectors(root: str | Path) -> tuple[tuple[Chunk, ...], npt.NDArray[np.float32]]:
@@ -106,8 +112,8 @@ def _load_default_model() -> EmbeddingModel:
     return load_embedding_model()
 
 
-def _metadata_version_is_current(path: Path) -> bool:
-    """Return whether persisted metadata matches the current index format."""
+def _metadata_matches(path: Path) -> bool:
+    """Return whether persisted metadata matches the requested index settings."""
     try:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -161,11 +167,13 @@ def _chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "kind": chunk.kind,
         "name": chunk.name,
         "language": chunk.language,
+        "summary": chunk.summary,
     }
 
 
 def _chunk_from_dict(data: dict[str, Any]) -> Chunk:
     """Create a chunk from persisted dictionary data."""
+    summary = data.get("summary")
     return Chunk(
         content=str(data["content"]),
         file_path=str(data["file_path"]),
@@ -174,4 +182,5 @@ def _chunk_from_dict(data: dict[str, Any]) -> Chunk:
         kind=str(data.get("kind", "file")),
         name=data.get("name") if isinstance(data.get("name"), str) else None,
         language=data.get("language") if isinstance(data.get("language"), str) else None,
+        summary=summary if isinstance(summary, str) else None,
     )

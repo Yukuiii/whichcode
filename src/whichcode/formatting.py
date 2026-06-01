@@ -32,5 +32,6 @@ def chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "kind": chunk.kind,
         "name": chunk.name,
         "language": chunk.language,
+        "summary": chunk.summary,
         "location": chunk.location,
     }

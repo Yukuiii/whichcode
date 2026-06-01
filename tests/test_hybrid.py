@@ -8,6 +8,7 @@ import numpy as np
 from whichcode.bm25 import build_bm25_index
 from whichcode.chunking import Chunk
 from whichcode.hybrid import HybridIndex, build_hybrid_index
+from whichcode.types import SearchResult
 from whichcode.vector import VectorIndex
 
 
@@ -34,6 +35,37 @@ class RecordingSearchIndex:
         """Record top_k and return no results."""
         self.requested_top_k = top_k
         return []
+
+
+class StaticSearchIndex:
+    """Search index stub that returns a predefined ranked list."""
+
+    def __init__(self, results: Sequence[SearchResult]) -> None:
+        """Store the search results and the last requested top_k."""
+        self.results = list(results)
+        self.requested_top_k: int | None = None
+
+    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
+        """Return the predefined results up to the requested limit."""
+        self.requested_top_k = top_k
+        return self.results[:top_k]
+
+
+class ReversingReranker:
+    """Reranker stub that records candidates and reverses their order."""
+
+    def __init__(self) -> None:
+        """Initialize captured reranker inputs."""
+        self.query: str | None = None
+        self.results: list[SearchResult] = []
+        self.top_k: int | None = None
+
+    def rerank(self, query: str, results: Sequence[SearchResult], top_k: int) -> list[SearchResult]:
+        """Return the captured candidates in reverse order."""
+        self.query = query
+        self.results = list(results)
+        self.top_k = top_k
+        return list(reversed(self.results))[:top_k]
 
 
 def test_hybrid_search_merges_bm25_and_vector_results() -> None:
@@ -121,3 +153,22 @@ def test_hybrid_search_overfetches_at_least_twenty_five_candidates() -> None:
     assert index.search("query", top_k=1) == []
     assert bm25.requested_top_k == 25
     assert vector.requested_top_k == 25
+
+
+def test_hybrid_search_reranks_top_twenty_candidates() -> None:
+    """HybridIndex.search should send the hybrid top twenty candidates to the LLM reranker."""
+    chunks = [Chunk(f"def func_{index}(): pass", f"src/file{index:02d}.py", 1, 1, "function") for index in range(25)]
+    ranked = [SearchResult(chunk=chunk, score=float(25 - index)) for index, chunk in enumerate(chunks)]
+    bm25 = StaticSearchIndex(ranked)
+    vector = StaticSearchIndex(ranked)
+    reranker = ReversingReranker()
+    index = HybridIndex(bm25=bm25, vector=vector)
+
+    results = index.search("query", top_k=10, reranker=reranker)
+
+    assert bm25.requested_top_k == 50
+    assert vector.requested_top_k == 50
+    assert reranker.query == "query"
+    assert reranker.top_k == 10
+    assert len(reranker.results) == 20
+    assert [result.chunk.file_path for result in results[:2]] == ["src/file19.py", "src/file18.py"]
