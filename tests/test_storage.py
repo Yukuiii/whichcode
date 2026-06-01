@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 
-from whichcode.storage import index_exists, load_chunks_and_vectors, load_or_build_hybrid_index
+from whichcode.storage import index_dir, index_exists, load_chunks_and_vectors, load_or_build_hybrid_index
 
 
 class ConstantEmbeddingModel:
@@ -29,6 +29,17 @@ def test_load_or_build_hybrid_index_persists_chunks_and_vectors(tmp_path) -> Non
     assert chunks[0].name == "run"
     assert vectors.shape == (1, 1)
     assert vectors.dtype == np.float32
+
+
+def test_index_exists_rejects_old_metadata_version(tmp_path) -> None:
+    """index_exists should reject stale persisted indexes after format changes."""
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    load_or_build_hybrid_index(tmp_path, model=ConstantEmbeddingModel())
+    metadata_path = index_dir(tmp_path) / "metadata.json"
+    metadata = metadata_path.read_text(encoding="utf-8").replace('"version": 2', '"version": 1')
+    metadata_path.write_text(metadata, encoding="utf-8")
+
+    assert not index_exists(tmp_path)
 
 
 def test_load_or_build_hybrid_index_reuses_existing_files(tmp_path) -> None:

@@ -23,13 +23,11 @@ def test_scan_chunks_reads_supported_files_and_skips_blank_or_ignored_files(tmp_
 
     chunks = scan_chunks(tmp_path)
 
-    assert [chunk.file_path for chunk in chunks] == ["src/README.md", "src/app.js", "src/app.py"]
-    assert chunks[0].kind == "file"
-    assert "# Notes" in chunks[0].content
+    assert [chunk.file_path for chunk in chunks] == ["src/app.js", "src/app.py"]
+    assert chunks[0].kind == "function"
+    assert chunks[0].name == "start"
     assert chunks[1].kind == "function"
-    assert chunks[1].name == "start"
-    assert chunks[2].kind == "function"
-    assert chunks[2].name == "run"
+    assert chunks[1].name == "run"
 
 
 def test_scan_chunks_raises_for_missing_path(tmp_path: Path) -> None:

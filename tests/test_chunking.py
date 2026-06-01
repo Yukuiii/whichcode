@@ -8,22 +8,11 @@ def test_chunk_source_skips_blank_files() -> None:
     assert chunk_source(" \n\t\n", "blank.py") == []
 
 
-def test_chunk_source_keeps_markdown_as_one_file_chunk() -> None:
-    """chunk_source should keep Markdown documents as a single file chunk."""
+def test_chunk_source_skips_unsupported_suffixes() -> None:
+    """chunk_source should not index files outside the supported suffix list."""
     source = "# Notes\n\nUse this project.\n\n## Details\n\nMore prose.\n"
 
-    chunks = chunk_source(source, "README.md")
-
-    assert chunks == [
-        Chunk(
-            content=source,
-            file_path="README.md",
-            start_line=1,
-            end_line=7,
-            kind="file",
-            language="markdown",
-        )
-    ]
+    assert chunk_source(source, "README.md") == []
 
 
 def test_chunk_source_splits_python_functions_and_preserves_context() -> None:
@@ -80,13 +69,17 @@ def test_chunk_source_splits_javascript_functions_and_methods() -> None:
 
 def test_chunk_source_falls_back_to_one_file_chunk_without_functions() -> None:
     """chunk_source should return a single file chunk when no function is present."""
-    chunks = chunk_source("VALUE = 1\n", "config.unknown")
+    chunks = chunk_source("VALUE = 1\n", "config.py")
 
-    assert chunks == [Chunk(content="VALUE = 1\n", file_path="config.unknown", start_line=1, end_line=1)]
+    assert chunks == [
+        Chunk(content="VALUE = 1\n", file_path="config.py", start_line=1, end_line=1, language="python")
+    ]
 
 
 def test_chunk_source_falls_back_for_unsupported_language() -> None:
     """chunk_source should keep the whole file when tree-sitter is not enabled."""
-    chunks = chunk_source("fn main() {}\n", "main.unknown")
+    chunks = chunk_source("fn main() {}\n", "main.py", language="unknown_language")
 
-    assert chunks == [Chunk(content="fn main() {}\n", file_path="main.unknown", start_line=1, end_line=1)]
+    assert chunks == [
+        Chunk(content="fn main() {}\n", file_path="main.py", start_line=1, end_line=1, language="unknown_language")
+    ]

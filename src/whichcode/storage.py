@@ -20,7 +20,7 @@ INDEX_DIR_NAME = ".whichcode"
 CHUNKS_FILE_NAME = "chunks.jsonl"
 VECTORS_FILE_NAME = "vectors.npy"
 METADATA_FILE_NAME = "metadata.json"
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 
 
 def load_or_build_hybrid_index(
@@ -48,10 +48,11 @@ def load_or_build_hybrid_index(
 def index_exists(root: str | Path) -> bool:
     """Return whether the required persisted index files exist."""
     index_path = index_dir(root)
-    return all(
+    required_files_exist = all(
         (index_path / file_name).exists()
         for file_name in (CHUNKS_FILE_NAME, VECTORS_FILE_NAME, METADATA_FILE_NAME)
     )
+    return required_files_exist and _metadata_version_is_current(index_path / METADATA_FILE_NAME)
 
 
 def save_chunks_and_vectors(
@@ -103,6 +104,15 @@ def _load_default_model() -> EmbeddingModel:
     from whichcode.vector import load_embedding_model
 
     return load_embedding_model()
+
+
+def _metadata_version_is_current(path: Path) -> bool:
+    """Return whether persisted metadata matches the current index format."""
+    try:
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return metadata.get("version") == INDEX_VERSION
 
 
 def _write_chunks(path: Path, chunks: tuple[Chunk, ...]) -> None:

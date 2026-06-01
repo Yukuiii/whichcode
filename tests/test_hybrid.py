@@ -86,24 +86,6 @@ def test_hybrid_search_penalizes_lower_signal_paths() -> None:
     assert raw[0].chunk.file_path == "tests/test_impl.py"
 
 
-def test_hybrid_search_penalizes_markdown_agent_docs() -> None:
-    """HybridIndex.search should keep broad agent docs below matching code chunks."""
-    query = "how are repository files converted into searchable pieces with keyword embeddings"
-    chunks = [
-        Chunk("def build_index(): return embed_chunks(files)", "src/index/create.py", 1, 1, "function"),
-        Chunk("Start with search to find relevant chunks. The index is cached.", "src/agents/cursor.md", 1, 1, "file"),
-    ]
-    model = FakeEmbeddingModel({query: [0.0, 1.0]})
-    vector = VectorIndex.from_embeddings(chunks, [[1.0, 0.0], [0.0, 1.0]], model)
-    index = HybridIndex(bm25=build_bm25_index(chunks), vector=vector)
-
-    penalized = index.search(query, top_k=2, alpha=1.0)
-    raw = index.search(query, top_k=2, alpha=1.0, penalize_paths=False)
-
-    assert penalized[0].chunk.file_path == "src/index/create.py"
-    assert raw[0].chunk.file_path == "src/agents/cursor.md"
-
-
 def test_build_hybrid_index_builds_both_indexes() -> None:
     """build_hybrid_index should build BM25 and vector indexes from chunks."""
     chunk = Chunk("def run(): pass", "src/app.py", 1, 1, "function")

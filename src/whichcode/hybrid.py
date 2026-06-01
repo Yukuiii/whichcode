@@ -22,11 +22,9 @@ _TEST_FILE_RE = re.compile(
 )
 _TEST_DIR_RE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec|testing)(?:/|$)")
 _LOW_SIGNAL_DIR_RE = re.compile(
-    r"(?:^|/)(?:_?examples?|benchmarks?|docs?|docs?_src|agents?|compat|_compat|legacy)(?:/|$)"
+    r"(?:^|/)(?:_?examples?|benchmarks?|docs?|docs?_src|compat|_compat|legacy)(?:/|$)"
 )
-_MARKDOWN_RE = re.compile(r"\.(?:md|markdown)$", re.IGNORECASE)
 _REEXPORT_FILENAMES = frozenset({"__init__.py", "package-info.java"})
-_LOW_SIGNAL_FILENAMES = frozenset({"readme.md", "changelog.md", "contributing.md"})
 _TYPE_DEFS_RE = re.compile(r"\.d\.ts$")
 
 
@@ -154,16 +152,11 @@ def _count_term_hits(query_terms: Sequence[str], candidate_terms: set[str]) -> i
 def _path_penalty(file_path: str) -> float:
     """Return a multiplicative penalty for lower-signal file paths."""
     normalized = file_path.replace("\\", "/")
-    filename = Path(file_path).name.lower()
     penalty = 1.0
     if _TEST_FILE_RE.search(normalized) is not None or _TEST_DIR_RE.search(normalized) is not None:
         penalty *= _STRONG_PATH_PENALTY
     if _LOW_SIGNAL_DIR_RE.search(normalized) is not None:
         penalty *= _STRONG_PATH_PENALTY
-    if filename in _LOW_SIGNAL_FILENAMES:
-        penalty *= _MODERATE_PATH_PENALTY
-    if _MARKDOWN_RE.search(normalized) is not None:
-        penalty *= _MILD_PATH_PENALTY
     if Path(file_path).name in _REEXPORT_FILENAMES:
         penalty *= _MODERATE_PATH_PENALTY
     if _TYPE_DEFS_RE.search(normalized) is not None:
