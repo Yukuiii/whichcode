@@ -17,6 +17,8 @@ from tree_sitter_language_pack import (
 
 FUNCTION_KINDS = {"function", "method", "constructor"}
 CLASS_KIND = "class"
+MARKDOWN_LANGUAGES = {"markdown", "markdown_inline"}
+MARKDOWN_SUFFIXES = {".md", ".markdown"}
 SUPPORTED_SUFFIXES = {
     ".c",
     ".cc",
@@ -39,6 +41,8 @@ SUPPORTED_SUFFIXES = {
     ".kts",
     ".lua",
     ".m",
+    ".markdown",
+    ".md",
     ".mjs",
     ".mm",
     ".php",
@@ -94,6 +98,8 @@ def chunk_source(source: str, file_path: str, language: str | None = None) -> li
 
     source_bytes = source.encode("utf-8")
     resolved_language = _resolve_language(file_path, language)
+    if resolved_language in MARKDOWN_LANGUAGES:
+        return [_make_chunk(source_bytes, 0, len(source_bytes), file_path, "file", None, resolved_language)]
     if resolved_language is None or not _can_parse_language(resolved_language):
         return [_make_chunk(source_bytes, 0, len(source_bytes), file_path, "file", None, resolved_language)]
 
@@ -119,6 +125,8 @@ def _resolve_language(file_path: str, language: str | None) -> str | None:
     """Resolve an explicit or path-inferred tree-sitter language name."""
     if language:
         return language.lower()
+    if file_path.lower().endswith(tuple(MARKDOWN_SUFFIXES)):
+        return "markdown"
     detected = detect_language_from_path(file_path)
     return detected.lower() if detected else None
 

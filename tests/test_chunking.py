@@ -8,6 +8,24 @@ def test_chunk_source_skips_blank_files() -> None:
     assert chunk_source(" \n\t\n", "blank.py") == []
 
 
+def test_chunk_source_keeps_markdown_as_one_file_chunk() -> None:
+    """chunk_source should keep Markdown documents as a single file chunk."""
+    source = "# Notes\n\nUse this project.\n\n## Details\n\nMore prose.\n"
+
+    chunks = chunk_source(source, "README.md")
+
+    assert chunks == [
+        Chunk(
+            content=source,
+            file_path="README.md",
+            start_line=1,
+            end_line=7,
+            kind="file",
+            language="markdown",
+        )
+    ]
+
+
 def test_chunk_source_splits_python_functions_and_preserves_context() -> None:
     """chunk_source should emit method chunks and keep surrounding module context."""
     source = (

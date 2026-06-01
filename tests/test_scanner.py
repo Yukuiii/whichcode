@@ -13,6 +13,7 @@ def test_scan_chunks_reads_supported_files_and_skips_blank_or_ignored_files(tmp_
     src.mkdir()
     (src / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     (src / "app.js").write_text("function start() { return 1; }\n", encoding="utf-8")
+    (src / "README.md").write_text("# Notes\n\nUse this project.\n", encoding="utf-8")
     (src / "blank.py").write_text(" \n\t\n", encoding="utf-8")
     (src / "notes.txt").write_text("def ignored():\n    return 0\n", encoding="utf-8")
 
@@ -22,11 +23,13 @@ def test_scan_chunks_reads_supported_files_and_skips_blank_or_ignored_files(tmp_
 
     chunks = scan_chunks(tmp_path)
 
-    assert [chunk.file_path for chunk in chunks] == ["src/app.js", "src/app.py"]
-    assert chunks[0].kind == "function"
-    assert chunks[0].name == "start"
+    assert [chunk.file_path for chunk in chunks] == ["src/README.md", "src/app.js", "src/app.py"]
+    assert chunks[0].kind == "file"
+    assert "# Notes" in chunks[0].content
     assert chunks[1].kind == "function"
-    assert chunks[1].name == "run"
+    assert chunks[1].name == "start"
+    assert chunks[2].kind == "function"
+    assert chunks[2].name == "run"
 
 
 def test_scan_chunks_raises_for_missing_path(tmp_path: Path) -> None:
