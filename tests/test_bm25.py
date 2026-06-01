@@ -1,6 +1,6 @@
 """Tests for BM25 chunk search."""
 
-from whichcode.bm25 import build_bm25_index, enrich_for_bm25, split_identifier, tokenize
+from whichcode.bm25 import build_bm25_index, enrich_for_bm25, extract_search_terms, split_identifier, tokenize
 from whichcode.chunking import Chunk
 
 
@@ -21,6 +21,19 @@ def test_tokenize_splits_compound_identifiers() -> None:
 def test_split_identifier_keeps_simple_identifier_once() -> None:
     """split_identifier should avoid duplicate tokens for simple words."""
     assert split_identifier("simple") == ["simple"]
+
+
+def test_extract_search_terms_filters_noise_and_adds_stems() -> None:
+    """extract_search_terms should keep code terms and expand common suffixes."""
+    terms = extract_search_terms("How are indexes cached by CacheBuilder?")
+
+    assert "how" not in terms
+    assert "indexes" in terms
+    assert "index" in terms
+    assert "cached" in terms
+    assert "cache" in terms
+    assert "cachebuilder" in terms
+    assert "builder" in terms
 
 
 def test_enrich_for_bm25_adds_path_and_chunk_metadata() -> None:
