@@ -28,3 +28,19 @@ chunks = scan_chunks(".")
 index = build_bm25_index(chunks)
 results = index.search("authentication token", top_k=5)
 ```
+
+```python
+from whichcode import build_vector_index, scan_chunks
+
+chunks = scan_chunks(".")
+index = build_vector_index(chunks)
+results = index.search("how authentication is handled", top_k=5)
+```
+
+```python
+from whichcode import build_hybrid_index, scan_chunks
+
+chunks = scan_chunks(".")
+index = build_hybrid_index(chunks)
+results = index.search("authenticate_token behavior", top_k=5)
+```

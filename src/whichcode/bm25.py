@@ -10,17 +10,10 @@ from pathlib import Path
 import bm25s
 
 from whichcode.chunking import Chunk
+from whichcode.types import SearchResult
 
 _TOKEN_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 _CAMEL_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
-
-
-@dataclass(frozen=True, slots=True)
-class SearchResult:
-    """Represents one ranked chunk returned by a search query."""
-
-    chunk: Chunk
-    score: float
 
 
 @dataclass(frozen=True, slots=True)
