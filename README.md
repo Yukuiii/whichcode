@@ -20,3 +20,11 @@ chunks = scan_chunks(".")
 ```
 
 Chunks are emitted as `module`, `class`, `function`, `method`, or `file` records.
+
+```python
+from whichcode import build_bm25_index, scan_chunks
+
+chunks = scan_chunks(".")
+index = build_bm25_index(chunks)
+results = index.search("authentication token", top_k=5)
+```
