@@ -51,23 +51,6 @@ class StaticSearchIndex:
         return self.results[:top_k]
 
 
-class ReversingReranker:
-    """Reranker stub that records candidates and reverses their order."""
-
-    def __init__(self) -> None:
-        """Initialize captured reranker inputs."""
-        self.query: str | None = None
-        self.results: list[SearchResult] = []
-        self.top_k: int | None = None
-
-    def rerank(self, query: str, results: Sequence[SearchResult], top_k: int) -> list[SearchResult]:
-        """Return the captured candidates in reverse order."""
-        self.query = query
-        self.results = list(results)
-        self.top_k = top_k
-        return list(reversed(self.results))[:top_k]
-
-
 def test_hybrid_search_merges_bm25_and_vector_results() -> None:
     """HybridIndex.search should return candidates from both retrieval paths."""
     chunks = [
@@ -101,11 +84,26 @@ def test_hybrid_search_alpha_controls_weighting() -> None:
     assert semantic_first[0].chunk.file_path == "src/view.py"
 
 
+def test_hybrid_search_defaults_symbol_queries_toward_bm25() -> None:
+    """HybridIndex.search should lean toward lexical matches for bare symbols."""
+    chunks = [
+        Chunk("class Command: pass", "src/core.py", 1, 1, "class", name="Command"),
+        Chunk("def unrelated(): pass", "src/vector.py", 1, 1, "function"),
+    ]
+    model = FakeEmbeddingModel({"Command": [0.0, 1.0]})
+    vector = VectorIndex.from_embeddings(chunks, [[1.0, 0.0], [0.0, 1.0]], model)
+    index = HybridIndex(bm25=build_bm25_index(chunks), vector=vector)
+
+    results = index.search("Command", top_k=2)
+
+    assert results[0].chunk.file_path == "src/core.py"
+
+
 def test_hybrid_search_penalizes_lower_signal_paths() -> None:
-    """HybridIndex.search should demote tests when path penalties are enabled."""
+    """HybridIndex.search should demote lower-signal paths when path penalties are enabled."""
     chunks = [
         Chunk("def impl(): pass", "src/impl.py", 1, 1, "function"),
-        Chunk("def impl(): pass", "tests/test_impl.py", 1, 1, "function"),
+        Chunk("def impl(): pass", "src/_impl.py", 1, 1, "function"),
     ]
     model = FakeEmbeddingModel({"implementation": [0.0, 1.0]})
     vector = VectorIndex.from_embeddings(chunks, [[1.0, 0.0], [0.0, 1.0]], model)
@@ -115,7 +113,7 @@ def test_hybrid_search_penalizes_lower_signal_paths() -> None:
     raw = index.search("implementation", top_k=2, alpha=1.0, penalize_paths=False)
 
     assert penalized[0].chunk.file_path == "src/impl.py"
-    assert raw[0].chunk.file_path == "tests/test_impl.py"
+    assert raw[0].chunk.file_path == "src/_impl.py"
 
 
 def test_build_hybrid_index_builds_both_indexes() -> None:
@@ -144,31 +142,27 @@ def test_hybrid_search_rejects_invalid_alpha() -> None:
         raise AssertionError("expected ValueError")
 
 
-def test_hybrid_search_overfetches_at_least_twenty_five_candidates() -> None:
-    """HybridIndex.search should keep enough candidates even for top_k=1."""
+def test_hybrid_search_recalls_fifty_candidates() -> None:
+    """HybridIndex.search should recall fifty candidates before rule ranking."""
     bm25 = RecordingSearchIndex()
     vector = RecordingSearchIndex()
     index = HybridIndex(bm25=bm25, vector=vector)
 
     assert index.search("query", top_k=1) == []
-    assert bm25.requested_top_k == 25
-    assert vector.requested_top_k == 25
-
-
-def test_hybrid_search_reranks_top_twenty_candidates() -> None:
-    """HybridIndex.search should send the hybrid top twenty candidates to the LLM reranker."""
-    chunks = [Chunk(f"def func_{index}(): pass", f"src/file{index:02d}.py", 1, 1, "function") for index in range(25)]
-    ranked = [SearchResult(chunk=chunk, score=float(25 - index)) for index, chunk in enumerate(chunks)]
-    bm25 = StaticSearchIndex(ranked)
-    vector = StaticSearchIndex(ranked)
-    reranker = ReversingReranker()
-    index = HybridIndex(bm25=bm25, vector=vector)
-
-    results = index.search("query", top_k=10, reranker=reranker)
-
     assert bm25.requested_top_k == 50
     assert vector.requested_top_k == 50
-    assert reranker.query == "query"
-    assert reranker.top_k == 10
-    assert len(reranker.results) == 20
-    assert [result.chunk.file_path for result in results[:2]] == ["src/file19.py", "src/file18.py"]
+
+
+def test_hybrid_search_applies_file_saturation() -> None:
+    """HybridIndex.search should avoid filling all results with one file."""
+    same_file_chunks = [Chunk(f"def func_{index}(): pass", "src/core.py", index + 1, index + 1, "function") for index in range(4)]
+    other_chunk = Chunk("def other(): pass", "src/other.py", 1, 1, "function")
+    chunks = [*same_file_chunks, other_chunk]
+    ranked = [SearchResult(chunk=chunk, score=float(10 - index)) for index, chunk in enumerate(chunks)]
+    bm25 = StaticSearchIndex(ranked)
+    vector = StaticSearchIndex(ranked)
+    index = HybridIndex(bm25=bm25, vector=vector)
+
+    results = index.search("query", top_k=3)
+
+    assert "src/other.py" in [result.chunk.file_path for result in results]

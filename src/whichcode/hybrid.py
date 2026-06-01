@@ -9,24 +9,26 @@ from pathlib import Path
 
 from whichcode.bm25 import BM25Index, build_bm25_index, extract_search_terms, tokenize
 from whichcode.chunking import Chunk
-from whichcode.reranker import LLM_RERANK_CANDIDATES, ResultReranker
+from whichcode.ranking_rules import apply_path_prior
 from whichcode.types import SearchResult
 from whichcode.vector import EmbeddingModel, VectorIndex, build_vector_index
 
 _RRF_K = 60
-_STRONG_PATH_PENALTY = 0.3
-_MODERATE_PATH_PENALTY = 0.5
-_MILD_PATH_PENALTY = 0.7
+_HYBRID_RECALL_CANDIDATES = 50
+_FILE_COHERENCE_BOOST_FRACTION = 0.15
+_FILE_SATURATION_THRESHOLD = 1
+_FILE_SATURATION_DECAY = 0.65
 _TINY_QUERY_BOOST = 1e-12
-_TEST_FILE_RE = re.compile(
-    r"(?:^|/)(?:test_[^/]*\.\w+|[^/]*_test\.\w+|[^/]*\.test\.[jt]sx?|[^/]*\.spec\.[jt]sx?)$"
+_SYMBOL_QUERY_RE = re.compile(
+    r"^(?:"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\\|->|\.)[A-Za-z_][A-Za-z0-9_]*)+"
+    r"|_[A-Za-z0-9_]*"
+    r"|[A-Za-z][A-Za-z0-9]*[A-Z_][A-Za-z0-9_]*"
+    r"|[A-Z][A-Za-z0-9]*"
+    r")$"
 )
-_TEST_DIR_RE = re.compile(r"(?:^|/)(?:tests?|__tests__|spec|testing)(?:/|$)")
-_LOW_SIGNAL_DIR_RE = re.compile(
-    r"(?:^|/)(?:_?examples?|benchmarks?|docs?|docs?_src|compat|_compat|legacy)(?:/|$)"
-)
-_REEXPORT_FILENAMES = frozenset({"__init__.py", "package-info.java"})
-_TYPE_DEFS_RE = re.compile(r"\.d\.ts$")
+_ALPHA_SYMBOL = 0.3
+_ALPHA_NATURAL_LANGUAGE = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,42 +51,40 @@ class HybridIndex:
         self,
         query: str,
         top_k: int = 10,
-        alpha: float = 0.5,
+        alpha: float | None = None,
         penalize_paths: bool = True,
-        reranker: ResultReranker | None = None,
     ) -> list[SearchResult]:
         """Return hybrid-ranked chunks for a query."""
         if top_k < 1 or not query.strip():
             return []
-        if not 0.0 <= alpha <= 1.0:
+        alpha_weight = _resolve_alpha(query, alpha)
+        if not 0.0 <= alpha_weight <= 1.0:
             raise ValueError("alpha must be between 0.0 and 1.0")
 
-        candidate_count = max(top_k * 5, 25)
+        candidate_count = max(top_k * 5, _HYBRID_RECALL_CANDIDATES)
         bm25_scores = _rrf_scores(self.bm25.search(query, top_k=candidate_count))
         vector_scores = _rrf_scores(self.vector.search(query, top_k=candidate_count))
         candidates = sorted({*bm25_scores, *vector_scores}, key=lambda chunk: (chunk.file_path, chunk.start_line))
-        query_terms = extract_search_terms(query) if alpha < 1.0 else []
+        query_terms = extract_search_terms(query) if alpha_weight < 1.0 else []
+        combined_scores = {
+            chunk: _apply_query_relevance(
+                chunk,
+                alpha_weight * vector_scores.get(chunk, 0.0) + (1.0 - alpha_weight) * bm25_scores.get(chunk, 0.0),
+                query_terms,
+            )
+            for chunk in candidates
+        }
+        _boost_file_coherence(combined_scores)
         combined = [
             SearchResult(
                 chunk=chunk,
-                score=_apply_path_penalty(
-                    chunk,
-                    _apply_query_relevance(
-                        chunk,
-                        alpha * vector_scores.get(chunk, 0.0) + (1.0 - alpha) * bm25_scores.get(chunk, 0.0),
-                        query_terms,
-                    ),
-                    penalize_paths,
-                ),
+                score=_apply_path_penalty(chunk, combined_scores[chunk], penalize_paths),
             )
             for chunk in candidates
         ]
         combined.sort(key=lambda result: result.score, reverse=True)
         ranked = [result for result in combined if result.score > 0.0]
-        if reranker is None:
-            return ranked[:top_k]
-        rerank_count = max(top_k, LLM_RERANK_CANDIDATES)
-        return reranker.rerank(query, ranked[:rerank_count], top_k)
+        return _select_with_file_saturation(ranked, top_k)
 
 
 def build_hybrid_index(chunks: Sequence[Chunk], model: EmbeddingModel | None = None) -> HybridIndex:
@@ -97,11 +97,63 @@ def _rrf_scores(results: Sequence[SearchResult]) -> dict[Chunk, float]:
     return {result.chunk: 1.0 / (_RRF_K + rank) for rank, result in enumerate(results, 1)}
 
 
+def _resolve_alpha(query: str, alpha: float | None) -> float:
+    """Return semantic-vs-lexical blend weight for the query."""
+    if alpha is not None:
+        return alpha
+    return _ALPHA_SYMBOL if _is_symbol_query(query) else _ALPHA_NATURAL_LANGUAGE
+
+
+def _is_symbol_query(query: str) -> bool:
+    """Return whether the query looks like a bare code symbol."""
+    return _SYMBOL_QUERY_RE.match(query.strip()) is not None
+
+
 def _apply_path_penalty(chunk: Chunk, score: float, penalize_paths: bool) -> float:
     """Apply path-based score penalties when enabled."""
     if not penalize_paths:
         return score
-    return score * _path_penalty(chunk.file_path)
+    return apply_path_prior(chunk.file_path, score)
+
+
+def _boost_file_coherence(scores: dict[Chunk, float]) -> None:
+    """Lightly promote the best chunk from files with multiple relevant candidates."""
+    if not scores:
+        return
+    max_score = max(scores.values())
+    if max_score <= 0.0:
+        return
+
+    file_totals: dict[str, float] = {}
+    best_by_file: dict[str, Chunk] = {}
+    for chunk, score in scores.items():
+        file_totals[chunk.file_path] = file_totals.get(chunk.file_path, 0.0) + score
+        if chunk.file_path not in best_by_file or score > scores[best_by_file[chunk.file_path]]:
+            best_by_file[chunk.file_path] = chunk
+
+    max_file_total = max(file_totals.values())
+    if max_file_total <= 0.0:
+        return
+    boost_unit = max_score * _FILE_COHERENCE_BOOST_FRACTION
+    for file_path, chunk in best_by_file.items():
+        scores[chunk] += boost_unit * file_totals[file_path] / max_file_total
+
+
+def _select_with_file_saturation(results: Sequence[SearchResult], top_k: int) -> list[SearchResult]:
+    """Select top results while decaying repeated chunks from the same file."""
+    file_counts: dict[str, int] = {}
+    selected: list[SearchResult] = []
+    for result in results:
+        count = file_counts.get(result.chunk.file_path, 0)
+        effective_score = result.score
+        if count >= _FILE_SATURATION_THRESHOLD:
+            excess = count - _FILE_SATURATION_THRESHOLD + 1
+            effective_score *= _FILE_SATURATION_DECAY**excess
+        selected.append(SearchResult(chunk=result.chunk, score=effective_score))
+        file_counts[result.chunk.file_path] = count + 1
+
+    selected.sort(key=lambda result: result.score, reverse=True)
+    return selected[:top_k]
 
 
 def _apply_query_relevance(chunk: Chunk, score: float, query_terms: Sequence[str]) -> float:
@@ -110,26 +162,30 @@ def _apply_query_relevance(chunk: Chunk, score: float, query_terms: Sequence[str
         return score
 
     metadata_tokens = set(_chunk_metadata_tokens(chunk))
+    path_tokens = set(_chunk_path_tokens(chunk))
     content_tokens = set(tokenize(chunk.content))
     name_tokens = set(tokenize(chunk.name or ""))
-    metadata_hits = _count_term_hits(query_terms, metadata_tokens)
-    content_hits = _count_term_hits(query_terms, content_tokens)
-    name_hits = _count_term_hits(query_terms, name_tokens)
+    path_hits = _count_fuzzy_term_hits(query_terms, path_tokens)
+    metadata_hits = _count_fuzzy_term_hits(query_terms, metadata_tokens)
+    content_hits = _count_fuzzy_term_hits(query_terms, content_tokens)
+    name_hits = _count_fuzzy_term_hits(query_terms, name_tokens)
     total_hits = len(
         {
             term
             for term in query_terms
-            if term in metadata_tokens or term in content_tokens
+            if _term_matches_any(term, metadata_tokens) or _term_matches_any(term, content_tokens)
         }
     )
 
     factor = 1.0
     if name_hits:
-        factor += min(name_hits, 3) * 0.25
+        factor += min(name_hits, 3) * 0.35
+    if path_hits:
+        factor += min(path_hits, 3) * 0.3
     if metadata_hits:
-        factor += min(metadata_hits, 4) * 0.15
+        factor += min(metadata_hits, 4) * 0.2
     if total_hits >= 2:
-        factor += min(total_hits, 5) * 0.08
+        factor += min(total_hits, 5) * 0.1
     elif len(query_terms) >= 2 and content_hits == 0:
         factor *= 0.85
 
@@ -150,21 +206,23 @@ def _chunk_metadata_tokens(chunk: Chunk) -> list[str]:
     return tokenize(" ".join(parts))
 
 
-def _count_term_hits(query_terms: Sequence[str], candidate_terms: set[str]) -> int:
-    """Count query terms that appear in a candidate term set."""
-    return sum(1 for term in query_terms if term in candidate_terms)
+def _chunk_path_tokens(chunk: Chunk) -> list[str]:
+    """Return searchable tokens from file and parent directory names."""
+    path = Path(chunk.file_path)
+    return tokenize(" ".join((path.stem, path.parent.as_posix())))
 
 
-def _path_penalty(file_path: str) -> float:
-    """Return a multiplicative penalty for lower-signal file paths."""
-    normalized = file_path.replace("\\", "/")
-    penalty = 1.0
-    if _TEST_FILE_RE.search(normalized) is not None or _TEST_DIR_RE.search(normalized) is not None:
-        penalty *= _STRONG_PATH_PENALTY
-    if _LOW_SIGNAL_DIR_RE.search(normalized) is not None:
-        penalty *= _STRONG_PATH_PENALTY
-    if Path(file_path).name in _REEXPORT_FILENAMES:
-        penalty *= _MODERATE_PATH_PENALTY
-    if _TYPE_DEFS_RE.search(normalized) is not None:
-        penalty *= _MILD_PATH_PENALTY
-    return penalty
+def _count_fuzzy_term_hits(query_terms: Sequence[str], candidate_terms: set[str]) -> int:
+    """Count query terms with exact or prefix-compatible candidate matches."""
+    return sum(1 for term in query_terms if _term_matches_any(term, candidate_terms))
+
+
+def _term_matches_any(term: str, candidate_terms: set[str]) -> bool:
+    """Return whether a query term matches any candidate token."""
+    if term in candidate_terms:
+        return True
+    for candidate in candidate_terms:
+        shorter, longer = (term, candidate) if len(term) <= len(candidate) else (candidate, term)
+        if len(shorter) >= 3 and longer.startswith(shorter):
+            return True
+    return False

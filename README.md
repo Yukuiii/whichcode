@@ -60,10 +60,9 @@ and reuses it on later runs.
 uv run whichcode . "how authentication is handled"
 ```
 
-The CLI first retrieves hybrid candidates from the user-level `.whichcode` index, then reranks the top 20
-candidates with the fixed local model `bartowski/Qwen_Qwen3.5-0.8B-GGUF` using
-`Qwen_Qwen3.5-0.8B-Q5_K_S.gguf`. The model file is downloaded into `~/.whichcode/models/` on first query
-and reused when it already exists.
+The CLI retrieves 50 hybrid candidates from the user-level `.whichcode` index, applies lightweight code-search
+ranking rules, then returns the best 10 chunks. Query-time ranking is deterministic and does not load any
+separate ranking model.
 
 ```bash
 uv run whichcode . "how authentication is handled" --rebuild
