@@ -31,6 +31,7 @@ def test_chunk_source_splits_python_functions_and_preserves_context() -> None:
     assert [chunk.kind for chunk in chunks] == ["module", "function", "module", "method"]
     assert chunks[1].name == "top"
     assert chunks[3].name == "Box.method"
+    assert chunks[1].language == "python"
     assert "import os" in chunks[0].content
     assert "class Box" in chunks[2].content
     assert chunks[1].start_line == 5
@@ -39,15 +40,32 @@ def test_chunk_source_splits_python_functions_and_preserves_context() -> None:
     assert chunks[3].end_line == 13
 
 
+def test_chunk_source_splits_javascript_functions_and_methods() -> None:
+    """chunk_source should handle non-Python tree-sitter languages."""
+    source = (
+        "function top(x) { return x; }\n"
+        "class Box {\n"
+        "  method(y) { return y; }\n"
+        "}\n"
+    )
+
+    chunks = chunk_source(source, "sample.js")
+
+    assert [chunk.kind for chunk in chunks] == ["function", "module", "method", "module"]
+    assert chunks[0].name == "top"
+    assert chunks[2].name == "Box.method"
+    assert chunks[0].language == "javascript"
+
+
 def test_chunk_source_falls_back_to_one_file_chunk_without_functions() -> None:
     """chunk_source should return a single file chunk when no function is present."""
-    chunks = chunk_source("VALUE = 1\n", "config.py")
+    chunks = chunk_source("VALUE = 1\n", "config.unknown")
 
-    assert chunks == [Chunk(content="VALUE = 1\n", file_path="config.py", start_line=1, end_line=1)]
+    assert chunks == [Chunk(content="VALUE = 1\n", file_path="config.unknown", start_line=1, end_line=1)]
 
 
 def test_chunk_source_falls_back_for_unsupported_language() -> None:
     """chunk_source should keep the whole file when tree-sitter is not enabled."""
-    chunks = chunk_source("fn main() {}\n", "main.rs")
+    chunks = chunk_source("fn main() {}\n", "main.unknown")
 
-    assert chunks == [Chunk(content="fn main() {}\n", file_path="main.rs", start_line=1, end_line=1)]
+    assert chunks == [Chunk(content="fn main() {}\n", file_path="main.unknown", start_line=1, end_line=1)]
