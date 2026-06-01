@@ -44,3 +44,9 @@ chunks = scan_chunks(".")
 index = build_hybrid_index(chunks)
 results = index.search("authenticate_token behavior", top_k=5)
 ```
+
+```python
+from whichcode import format_results
+
+payload = format_results("authenticate_token behavior", results)
+```
