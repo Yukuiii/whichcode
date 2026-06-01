@@ -142,15 +142,15 @@ def test_hybrid_search_rejects_invalid_alpha() -> None:
         raise AssertionError("expected ValueError")
 
 
-def test_hybrid_search_recalls_fifty_candidates() -> None:
-    """HybridIndex.search should recall fifty candidates before rule ranking."""
+def test_hybrid_search_recalls_one_hundred_candidates() -> None:
+    """HybridIndex.search should over-fetch candidates before rule ranking."""
     bm25 = RecordingSearchIndex()
     vector = RecordingSearchIndex()
     index = HybridIndex(bm25=bm25, vector=vector)
 
     assert index.search("query", top_k=1) == []
-    assert bm25.requested_top_k == 50
-    assert vector.requested_top_k == 50
+    assert bm25.requested_top_k == 100
+    assert vector.requested_top_k == 100
 
 
 def test_hybrid_search_applies_file_saturation() -> None:
@@ -166,3 +166,49 @@ def test_hybrid_search_applies_file_saturation() -> None:
     results = index.search("query", top_k=3)
 
     assert "src/other.py" in [result.chunk.file_path for result in results]
+
+
+def test_hybrid_search_boosts_exact_chunk_name_matches() -> None:
+    """HybridIndex.search should promote exact symbol name matches over generic hits."""
+    generic_chunk = Chunk("class CacheBuilderFactory: pass", "src/cache/factory.py", 1, 1, "class", name="CacheBuilderFactory")
+    exact_chunk = Chunk("class CacheBuilder: pass", "src/cache/builder.py", 1, 1, "class", name="CacheBuilder")
+    ranked = [
+        SearchResult(chunk=generic_chunk, score=1.0),
+        SearchResult(chunk=exact_chunk, score=0.9),
+    ]
+    index = HybridIndex(bm25=StaticSearchIndex(ranked), vector=StaticSearchIndex(ranked))
+
+    results = index.search("CacheBuilder", top_k=2, alpha=0.0)
+
+    assert results[0].chunk == exact_chunk
+
+
+def test_hybrid_search_applies_structured_filters() -> None:
+    """HybridIndex.search should filter candidates by structured query fields."""
+    function_chunk = Chunk(
+        "def authenticate_token(): pass",
+        "src/auth/session.py",
+        1,
+        1,
+        "function",
+        name="authenticate_token",
+        language="python",
+    )
+    class_chunk = Chunk(
+        "class AuthToken: pass",
+        "src/auth/token.py",
+        1,
+        1,
+        "class",
+        name="AuthToken",
+        language="python",
+    )
+    ranked = [
+        SearchResult(chunk=function_chunk, score=1.0),
+        SearchResult(chunk=class_chunk, score=0.9),
+    ]
+    index = HybridIndex(bm25=StaticSearchIndex(ranked), vector=StaticSearchIndex(ranked))
+
+    results = index.search("kind:class path:auth token", top_k=2, alpha=0.0)
+
+    assert [result.chunk for result in results] == [class_chunk]

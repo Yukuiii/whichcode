@@ -5,16 +5,21 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
-from whichcode.bm25 import BM25Index, build_bm25_index, extract_search_terms, tokenize
+from whichcode.bm25 import BM25Index, build_bm25_index
 from whichcode.chunking import Chunk
-from whichcode.ranking_rules import apply_path_prior
+from whichcode.ranking_rules import (
+    ParsedQuery,
+    apply_path_prior,
+    apply_relevance_rules,
+    chunk_matches_query_filters,
+    parse_query,
+)
 from whichcode.types import SearchResult
 from whichcode.vector import EmbeddingModel, VectorIndex, build_vector_index
 
 _RRF_K = 60
-_HYBRID_RECALL_CANDIDATES = 50
+_HYBRID_RECALL_CANDIDATES = 100
 _FILE_COHERENCE_BOOST_FRACTION = 0.15
 _FILE_SATURATION_THRESHOLD = 1
 _FILE_SATURATION_DECAY = 0.65
@@ -57,20 +62,27 @@ class HybridIndex:
         """Return hybrid-ranked chunks for a query."""
         if top_k < 1 or not query.strip():
             return []
-        alpha_weight = _resolve_alpha(query, alpha)
+
+        parsed_query = parse_query(query)
+        search_query = parsed_query.search_text
+        alpha_weight = _resolve_alpha(search_query, alpha)
         if not 0.0 <= alpha_weight <= 1.0:
             raise ValueError("alpha must be between 0.0 and 1.0")
 
-        candidate_count = max(top_k * 5, _HYBRID_RECALL_CANDIDATES)
-        bm25_scores = _rrf_scores(self.bm25.search(query, top_k=candidate_count))
-        vector_scores = _rrf_scores(self.vector.search(query, top_k=candidate_count))
-        candidates = sorted({*bm25_scores, *vector_scores}, key=lambda chunk: (chunk.file_path, chunk.start_line))
-        query_terms = extract_search_terms(query) if alpha_weight < 1.0 else []
+        candidate_count = max(top_k * 10, _HYBRID_RECALL_CANDIDATES)
+        bm25_scores = _rrf_scores(self.bm25.search(search_query, top_k=candidate_count))
+        vector_scores = _rrf_scores(self.vector.search(search_query, top_k=candidate_count))
+        candidates = [
+            chunk
+            for chunk in sorted({*bm25_scores, *vector_scores}, key=lambda chunk: (chunk.file_path, chunk.start_line))
+            if chunk_matches_query_filters(chunk, parsed_query)
+        ]
         combined_scores = {
             chunk: _apply_query_relevance(
                 chunk,
                 alpha_weight * vector_scores.get(chunk, 0.0) + (1.0 - alpha_weight) * bm25_scores.get(chunk, 0.0),
-                query_terms,
+                parsed_query,
+                alpha_weight,
             )
             for chunk in candidates
         }
@@ -78,7 +90,7 @@ class HybridIndex:
         combined = [
             SearchResult(
                 chunk=chunk,
-                score=_apply_path_penalty(chunk, combined_scores[chunk], penalize_paths),
+                score=_apply_path_penalty(chunk, combined_scores[chunk], penalize_paths, search_query),
             )
             for chunk in candidates
         ]
@@ -109,11 +121,11 @@ def _is_symbol_query(query: str) -> bool:
     return _SYMBOL_QUERY_RE.match(query.strip()) is not None
 
 
-def _apply_path_penalty(chunk: Chunk, score: float, penalize_paths: bool) -> float:
+def _apply_path_penalty(chunk: Chunk, score: float, penalize_paths: bool, query: str) -> float:
     """Apply path-based score penalties when enabled."""
     if not penalize_paths:
         return score
-    return apply_path_prior(chunk.file_path, score)
+    return apply_path_prior(chunk.file_path, score, query)
 
 
 def _boost_file_coherence(scores: dict[Chunk, float]) -> None:
@@ -156,73 +168,10 @@ def _select_with_file_saturation(results: Sequence[SearchResult], top_k: int) ->
     return selected[:top_k]
 
 
-def _apply_query_relevance(chunk: Chunk, score: float, query_terms: Sequence[str]) -> float:
+def _apply_query_relevance(chunk: Chunk, score: float, query: ParsedQuery, alpha_weight: float) -> float:
     """Boost chunks whose metadata or content matches multiple query concepts."""
-    if score <= 0.0 or not query_terms:
+    if score <= 0.0 or alpha_weight >= 1.0:
         return score
 
-    metadata_tokens = set(_chunk_metadata_tokens(chunk))
-    path_tokens = set(_chunk_path_tokens(chunk))
-    content_tokens = set(tokenize(chunk.content))
-    name_tokens = set(tokenize(chunk.name or ""))
-    path_hits = _count_fuzzy_term_hits(query_terms, path_tokens)
-    metadata_hits = _count_fuzzy_term_hits(query_terms, metadata_tokens)
-    content_hits = _count_fuzzy_term_hits(query_terms, content_tokens)
-    name_hits = _count_fuzzy_term_hits(query_terms, name_tokens)
-    total_hits = len(
-        {
-            term
-            for term in query_terms
-            if _term_matches_any(term, metadata_tokens) or _term_matches_any(term, content_tokens)
-        }
-    )
-
-    factor = 1.0
-    if name_hits:
-        factor += min(name_hits, 3) * 0.35
-    if path_hits:
-        factor += min(path_hits, 3) * 0.3
-    if metadata_hits:
-        factor += min(metadata_hits, 4) * 0.2
-    if total_hits >= 2:
-        factor += min(total_hits, 5) * 0.1
-    elif len(query_terms) >= 2 and content_hits == 0:
-        factor *= 0.85
-
-    return max(score * factor, _TINY_QUERY_BOOST)
-
-
-def _chunk_metadata_tokens(chunk: Chunk) -> list[str]:
-    """Return searchable tokens from stable chunk metadata."""
-    path = Path(chunk.file_path)
-    parts = [
-        chunk.file_path,
-        path.stem,
-        path.parent.as_posix(),
-        chunk.kind,
-        chunk.name or "",
-        chunk.language or "",
-    ]
-    return tokenize(" ".join(parts))
-
-
-def _chunk_path_tokens(chunk: Chunk) -> list[str]:
-    """Return searchable tokens from file and parent directory names."""
-    path = Path(chunk.file_path)
-    return tokenize(" ".join((path.stem, path.parent.as_posix())))
-
-
-def _count_fuzzy_term_hits(query_terms: Sequence[str], candidate_terms: set[str]) -> int:
-    """Count query terms with exact or prefix-compatible candidate matches."""
-    return sum(1 for term in query_terms if _term_matches_any(term, candidate_terms))
-
-
-def _term_matches_any(term: str, candidate_terms: set[str]) -> bool:
-    """Return whether a query term matches any candidate token."""
-    if term in candidate_terms:
-        return True
-    for candidate in candidate_terms:
-        shorter, longer = (term, candidate) if len(term) <= len(candidate) else (candidate, term)
-        if len(shorter) >= 3 and longer.startswith(shorter):
-            return True
-    return False
+    adjusted = apply_relevance_rules(chunk, score, query)
+    return max(adjusted, _TINY_QUERY_BOOST)
