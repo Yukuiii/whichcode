@@ -160,11 +160,48 @@ def _collect_structure_spans(
         children = item.get("children")
         next_class_stack = class_stack
         if kind == CLASS_KIND and name_text:
+            class_span = _class_header_span(item, source_bytes, language)
+            if class_span is not None:
+                spans.append(class_span)
             next_class_stack = (*class_stack, name_text)
         if isinstance(children, list):
             spans.extend(_collect_structure_spans(children, source_bytes, language, next_class_stack))
 
     return spans
+
+
+def _class_header_span(item: dict[str, Any], source_bytes: bytes, language: str) -> _Span | None:
+    """Convert a class structure item into a header/docstring span."""
+    name = item.get("name")
+    name_text = name if isinstance(name, str) and name else None
+    span = item.get("span")
+    if not isinstance(span, dict):
+        return None
+
+    start_byte = span.get("start_byte")
+    end_byte = span.get("end_byte")
+    if not isinstance(start_byte, int) or not isinstance(end_byte, int) or end_byte <= start_byte:
+        return None
+
+    children = item.get("children")
+    child_start = _first_child_start_byte(children, source_bytes) if isinstance(children, list) else None
+    header_end = child_start if child_start is not None and child_start > start_byte else end_byte
+    if not source_bytes[start_byte:header_end].strip():
+        return None
+    return _Span(start_byte, header_end, "class", name_text, language)
+
+
+def _first_child_start_byte(children: list[dict[str, Any]], source_bytes: bytes) -> int | None:
+    """Return the earliest child span start, including leading metadata lines."""
+    starts = []
+    for child in children:
+        span = child.get("span")
+        if not isinstance(span, dict):
+            continue
+        start_byte = span.get("start_byte")
+        if isinstance(start_byte, int):
+            starts.append(_expand_start_to_leading_metadata(source_bytes, start_byte))
+    return min(starts) if starts else None
 
 
 def _span_to_chunk_span(

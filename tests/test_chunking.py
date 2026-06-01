@@ -28,12 +28,14 @@ def test_chunk_source_splits_python_functions_and_preserves_context() -> None:
 
     chunks = chunk_source(source, "sample.py")
 
-    assert [chunk.kind for chunk in chunks] == ["module", "function", "module", "method"]
+    assert [chunk.kind for chunk in chunks] == ["module", "function", "class", "method"]
     assert chunks[1].name == "top"
+    assert chunks[2].name == "Box"
     assert chunks[3].name == "Box.method"
     assert chunks[1].language == "python"
     assert "import os" in chunks[0].content
     assert "class Box" in chunks[2].content
+    assert '"""Docstring."""' in chunks[2].content
     assert chunks[1].start_line == 5
     assert chunks[1].end_line == 7
     assert chunks[3].start_line == 12
@@ -51,8 +53,9 @@ def test_chunk_source_splits_javascript_functions_and_methods() -> None:
 
     chunks = chunk_source(source, "sample.js")
 
-    assert [chunk.kind for chunk in chunks] == ["function", "module", "method", "module"]
+    assert [chunk.kind for chunk in chunks] == ["function", "class", "method", "module"]
     assert chunks[0].name == "top"
+    assert chunks[1].name == "Box"
     assert chunks[2].name == "Box.method"
     assert chunks[0].language == "javascript"
 

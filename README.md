@@ -18,3 +18,5 @@ from whichcode import scan_chunks
 
 chunks = scan_chunks(".")
 ```
+
+Chunks are emitted as `module`, `class`, `function`, `method`, or `file` records.
