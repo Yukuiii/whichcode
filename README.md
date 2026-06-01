@@ -42,7 +42,7 @@ from whichcode import build_hybrid_index, scan_chunks
 
 chunks = scan_chunks(".")
 index = build_hybrid_index(chunks)
-results = index.search("authenticate_token behavior", top_k=5)
+results = index.search("authenticate_token behavior")
 ```
 
 ```python

@@ -23,6 +23,19 @@ class FakeEmbeddingModel:
         return [self.mapping[text] for text in texts]
 
 
+class RecordingSearchIndex:
+    """Search index stub that records requested candidate counts."""
+
+    def __init__(self) -> None:
+        """Initialize the recorded top_k value."""
+        self.requested_top_k: int | None = None
+
+    def search(self, query: str, top_k: int = 5) -> list:
+        """Record top_k and return no results."""
+        self.requested_top_k = top_k
+        return []
+
+
 def test_hybrid_search_merges_bm25_and_vector_results() -> None:
     """HybridIndex.search should return candidates from both retrieval paths."""
     chunks = [
@@ -97,3 +110,14 @@ def test_hybrid_search_rejects_invalid_alpha() -> None:
         assert "alpha" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_hybrid_search_overfetches_at_least_twenty_five_candidates() -> None:
+    """HybridIndex.search should keep enough candidates even for top_k=1."""
+    bm25 = RecordingSearchIndex()
+    vector = RecordingSearchIndex()
+    index = HybridIndex(bm25=bm25, vector=vector)
+
+    assert index.search("query", top_k=1) == []
+    assert bm25.requested_top_k == 25
+    assert vector.requested_top_k == 25

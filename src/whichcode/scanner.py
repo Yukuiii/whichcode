@@ -15,6 +15,7 @@ DEFAULT_IGNORED_DIRS = {
     ".venv",
     "venv",
     ".tox",
+    ".whichcode",
     ".pytest_cache",
     ".ruff_cache",
     ".cache",

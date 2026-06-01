@@ -44,7 +44,7 @@ class HybridIndex:
     def search(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 10,
         alpha: float = 0.5,
         penalize_paths: bool = True,
     ) -> list[SearchResult]:
@@ -54,7 +54,7 @@ class HybridIndex:
         if not 0.0 <= alpha <= 1.0:
             raise ValueError("alpha must be between 0.0 and 1.0")
 
-        candidate_count = top_k * 5
+        candidate_count = max(top_k * 5, 25)
         bm25_scores = _rrf_scores(self.bm25.search(query, top_k=candidate_count))
         vector_scores = _rrf_scores(self.vector.search(query, top_k=candidate_count))
         candidates = sorted({*bm25_scores, *vector_scores}, key=lambda chunk: (chunk.file_path, chunk.start_line))
