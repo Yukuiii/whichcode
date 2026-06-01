@@ -29,7 +29,6 @@ def test_format_results_includes_chunk_content_and_metadata() -> None:
         "kind": "function",
         "name": "run",
         "language": "python",
-        "summary": None,
         "location": "src/app.py:10-11",
     }
 

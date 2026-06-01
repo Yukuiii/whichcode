@@ -1,7 +1,5 @@
 """Tests for the whichcode command-line interface."""
 
-import pytest
-
 from whichcode.chunking import Chunk
 from whichcode.cli import main
 from whichcode.types import SearchResult
@@ -88,14 +86,3 @@ def test_main_passes_rebuild_flag(monkeypatch, capsys, tmp_path) -> None:
 
     capsys.readouterr()
     assert captured == {"path": str(tmp_path), "rebuild": True}
-
-
-@pytest.mark.parametrize("flag", ["--summarize", "--summary-model", "--summary-model-file"])
-def test_main_rejects_removed_summary_options(flag, tmp_path) -> None:
-    """main should not expose model configuration through CLI flags."""
-    argv = [str(tmp_path), "run", flag]
-    if flag != "--summarize":
-        argv.append("value")
-
-    with pytest.raises(SystemExit):
-        main(argv)

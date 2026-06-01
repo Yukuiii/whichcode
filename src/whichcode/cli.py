@@ -16,9 +16,9 @@ DEFAULT_RESULT_COUNT = 10
 def main(argv: Sequence[str] | None = None) -> None:
     """Run a query against a project path and print JSON results."""
     parser = argparse.ArgumentParser(prog="whichcode", description="Search a codebase with a local chunk index.")
-    parser.add_argument("path", help="Project directory to scan or load from .whichcode.")
+    parser.add_argument("path", help="Project directory to scan or load from ~/.whichcode.")
     parser.add_argument("query", help="Search query.")
-    parser.add_argument("--rebuild", action="store_true", help="Rebuild .whichcode before searching.")
+    parser.add_argument("--rebuild", action="store_true", help="Rebuild this project's ~/.whichcode index.")
     args = parser.parse_args(argv)
 
     index = load_or_build_hybrid_index(args.path, rebuild=args.rebuild)

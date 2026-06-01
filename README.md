@@ -53,15 +53,16 @@ from whichcode import format_results
 payload = format_results("authenticate_token behavior", results)
 ```
 
-The CLI builds a local `.whichcode/` index on first use and reuses it on later runs.
+The CLI builds a user-level index under `~/.whichcode/chunk/<sha256(resolved-project-path)>` on first use
+and reuses it on later runs.
 
 ```bash
 uv run whichcode . "how authentication is handled"
 ```
 
-The CLI first retrieves hybrid candidates from the local `.whichcode/` index, then reranks the top 20
+The CLI first retrieves hybrid candidates from the user-level `.whichcode` index, then reranks the top 20
 candidates with the fixed local model `bartowski/Qwen_Qwen3.5-0.8B-GGUF` using
-`Qwen_Qwen3.5-0.8B-Q5_K_S.gguf`. The model file is downloaded into `.whichcode/models/` on first query
+`Qwen_Qwen3.5-0.8B-Q5_K_S.gguf`. The model file is downloaded into `~/.whichcode/models/` on first query
 and reused when it already exists.
 
 ```bash

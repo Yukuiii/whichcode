@@ -13,14 +13,14 @@ import numpy.typing as npt
 from whichcode.bm25 import build_bm25_index
 from whichcode.chunking import Chunk
 from whichcode.hybrid import HybridIndex
+from whichcode.paths import project_index_dir, project_index_key
 from whichcode.scanner import scan_chunks
 from whichcode.vector import DEFAULT_EMBEDDING_MODEL, EmbeddingModel, VectorIndex, build_vector_index
 
-INDEX_DIR_NAME = ".whichcode"
 CHUNKS_FILE_NAME = "chunks.jsonl"
 VECTORS_FILE_NAME = "vectors.npy"
 METADATA_FILE_NAME = "metadata.json"
-INDEX_VERSION = 4
+INDEX_VERSION = 6
 
 
 def load_or_build_hybrid_index(
@@ -52,7 +52,7 @@ def index_exists(root: str | Path) -> bool:
         (index_path / file_name).exists()
         for file_name in (CHUNKS_FILE_NAME, VECTORS_FILE_NAME, METADATA_FILE_NAME)
     )
-    return required_files_exist and _metadata_matches(index_path / METADATA_FILE_NAME)
+    return required_files_exist and _metadata_matches(index_path / METADATA_FILE_NAME, root)
 
 
 def save_chunks_and_vectors(
@@ -62,7 +62,7 @@ def save_chunks_and_vectors(
     *,
     model_name: str = DEFAULT_EMBEDDING_MODEL,
 ) -> None:
-    """Persist chunks and vectors under the root .whichcode directory."""
+    """Persist chunks and vectors under the user-level index directory."""
     root_path = _resolve_root(root)
     output_dir = index_dir(root_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -78,7 +78,7 @@ def save_chunks_and_vectors(
 
 
 def load_chunks_and_vectors(root: str | Path) -> tuple[tuple[Chunk, ...], npt.NDArray[np.float32]]:
-    """Load persisted chunks and vectors from the root .whichcode directory."""
+    """Load persisted chunks and vectors from the user-level index directory."""
     root_path = _resolve_root(root)
     input_dir = index_dir(root_path)
     chunks = _read_chunks(input_dir / CHUNKS_FILE_NAME)
@@ -91,8 +91,8 @@ def load_chunks_and_vectors(root: str | Path) -> tuple[tuple[Chunk, ...], npt.ND
 
 
 def index_dir(root: str | Path) -> Path:
-    """Return the index directory under a project root."""
-    return _resolve_root(root) / INDEX_DIR_NAME
+    """Return ~/.whichcode/chunk/<sha256(resolved-root)> for a project root."""
+    return project_index_dir(_resolve_root(root))
 
 
 def _resolve_root(root: str | Path) -> Path:
@@ -112,13 +112,13 @@ def _load_default_model() -> EmbeddingModel:
     return load_embedding_model()
 
 
-def _metadata_matches(path: Path) -> bool:
+def _metadata_matches(path: Path, root: str | Path) -> bool:
     """Return whether persisted metadata matches the requested index settings."""
     try:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return metadata.get("version") == INDEX_VERSION
+    return metadata.get("version") == INDEX_VERSION and metadata.get("root_path_sha256") == project_index_key(root)
 
 
 def _write_chunks(path: Path, chunks: tuple[Chunk, ...]) -> None:
@@ -149,6 +149,7 @@ def _write_metadata(
     metadata = {
         "version": INDEX_VERSION,
         "root_path": str(root),
+        "root_path_sha256": project_index_key(root),
         "created_at": time.time(),
         "model_name": model_name,
         "chunk_count": len(chunks),
@@ -167,20 +168,17 @@ def _chunk_to_dict(chunk: Chunk) -> dict[str, Any]:
         "kind": chunk.kind,
         "name": chunk.name,
         "language": chunk.language,
-        "summary": chunk.summary,
     }
 
 
 def _chunk_from_dict(data: dict[str, Any]) -> Chunk:
     """Create a chunk from persisted dictionary data."""
-    summary = data.get("summary")
     return Chunk(
         content=str(data["content"]),
         file_path=str(data["file_path"]),
         start_line=int(data["start_line"]),
         end_line=int(data["end_line"]),
-        kind=str(data.get("kind", "file")),
+        kind=str(data["kind"]),
         name=data.get("name") if isinstance(data.get("name"), str) else None,
         language=data.get("language") if isinstance(data.get("language"), str) else None,
-        summary=summary if isinstance(summary, str) else None,
     )

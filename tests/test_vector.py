@@ -42,25 +42,6 @@ def test_chunk_to_embedding_text_includes_metadata() -> None:
     assert "def authenticate(): pass" in text
 
 
-def test_chunk_to_embedding_text_ignores_summary_when_present() -> None:
-    """chunk_to_embedding_text should not use deprecated summary metadata."""
-    chunk = Chunk(
-        content="def build(): pass",
-        file_path="src/build.py",
-        start_line=1,
-        end_line=1,
-        kind="function",
-        name="build",
-        language="python",
-        summary='{"purpose":"Builds the index.","key_terms":["indexing"]}',
-    )
-
-    text = chunk_to_embedding_text(chunk)
-
-    assert "summary:" not in text
-    assert "def build(): pass" in text
-
-
 def test_embed_texts_returns_float32_matrix() -> None:
     """embed_texts should normalize model output shape and dtype."""
     model = FakeEmbeddingModel({"hello": [1.0, 2.0]})

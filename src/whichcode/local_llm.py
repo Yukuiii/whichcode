@@ -7,6 +7,8 @@ from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from whichcode.paths import model_root_dir
+
 DEFAULT_LLM_BACKEND = "llama-cpp"
 DEFAULT_LLM_MODEL_NAME = "bartowski/Qwen_Qwen3.5-0.8B-GGUF"
 DEFAULT_LLM_MODEL_FILE = "Qwen_Qwen3.5-0.8B-Q5_K_S.gguf"
@@ -43,7 +45,7 @@ def load_chat_model(root: str | Path, config: LocalModelConfig | None = None) ->
 
 
 def resolve_local_model_path(root: str | Path, config: LocalModelConfig) -> Path:
-    """Resolve a local GGUF path or download the configured remote model under .whichcode."""
+    """Resolve a local GGUF path or download the configured remote model under ~/.whichcode."""
     if _looks_like_local_path(config.model_name):
         model_path = Path(config.model_name).expanduser()
         if not model_path.exists():
@@ -51,8 +53,7 @@ def resolve_local_model_path(root: str | Path, config: LocalModelConfig) -> Path
         return model_path.resolve()
 
     relative_file = _validate_remote_model_file(config.model_file)
-    root_path = Path(root).expanduser().resolve()
-    model_dir = root_path / ".whichcode" / "models" / _safe_model_dir(config.model_name)
+    model_dir = model_root_dir() / _safe_model_dir(config.model_name)
     model_path = model_dir / relative_file
     if model_path.exists():
         return model_path

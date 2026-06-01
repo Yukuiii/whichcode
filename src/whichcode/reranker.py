@@ -63,8 +63,15 @@ def create_default_reranker(root: str | Path, config: LocalModelConfig | None = 
 def _system_prompt() -> str:
     """Return the fixed instruction for local code-search reranking."""
     return (
-        "You rerank code search results for a developer. "
+        "You rerank code search candidates for code navigation. "
         "Use only the provided query and candidate chunks. "
+        "Rank candidates by how directly useful they are for understanding or changing the queried feature. "
+        "Prefer canonical definitions, public APIs, and owner modules over incidental callers. "
+        "Prefer candidates whose path, symbol name, class name, or function name matches the query concept. "
+        "For broad feature queries, prefer public wrapper modules over tests, examples, private helper modules, "
+        "compatibility files, or internal implementation details. "
+        "Treat hybrid_score as a strong prior; only move a lower-scored candidate above a higher-scored one "
+        "when it is clearly more directly relevant. "
         "Return strict JSON only, with the shape {\"ranking\":[id,...]}. "
         "The first id must be the most relevant candidate. "
         "Do not include ids that were not provided."
@@ -87,6 +94,7 @@ def _user_prompt(query: str, results: Sequence[SearchResult]) -> str:
         ]
         parts.extend(["", "<candidate>", *metadata, "content:", chunk.content, "</candidate>"])
     parts.append("")
+    parts.append("Rank all candidates from most directly useful to least useful for navigating the codebase.")
     parts.append("Return JSON now.")
     return "\n".join(parts)
 

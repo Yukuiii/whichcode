@@ -39,6 +39,12 @@ def _results(contents: Sequence[str]) -> list[SearchResult]:
     ]
 
 
+@pytest.fixture(autouse=True)
+def isolated_whichcode_home(monkeypatch, tmp_path) -> None:
+    """Redirect user-level model files to each test's temp home."""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
 def test_local_model_config_uses_full_qwen_context() -> None:
     """LocalModelConfig should use the Qwen GGUF context length by default."""
     assert LocalModelConfig().n_ctx == 262_144
@@ -55,7 +61,7 @@ def test_resolve_local_model_path_accepts_existing_local_file(tmp_path) -> None:
 
 
 def test_resolve_local_model_path_downloads_missing_remote_file(monkeypatch, tmp_path) -> None:
-    """resolve_local_model_path should download a missing remote GGUF into .whichcode."""
+    """resolve_local_model_path should download a missing remote GGUF into ~/.whichcode."""
     captured: dict[str, object] = {}
 
     def fake_download(repo_id: str, filename: str, local_dir: Path) -> str:
@@ -71,9 +77,10 @@ def test_resolve_local_model_path_downloads_missing_remote_file(monkeypatch, tmp
     resolved = resolve_local_model_path(tmp_path, LocalModelConfig())
 
     assert resolved.exists()
+    assert resolved.is_relative_to(Path.home() / ".whichcode" / "models")
     assert captured["repo_id"] == "bartowski/Qwen_Qwen3.5-0.8B-GGUF"
     assert captured["filename"] == "Qwen_Qwen3.5-0.8B-Q5_K_S.gguf"
-    assert str(captured["local_dir"]).endswith(".whichcode/models/bartowski__Qwen_Qwen3.5-0.8B-GGUF")
+    assert captured["local_dir"] == Path.home() / ".whichcode" / "models" / "bartowski__Qwen_Qwen3.5-0.8B-GGUF"
 
 
 @pytest.mark.parametrize("model_file", ["/model.gguf", "../model.gguf", "model.bin"])
@@ -92,9 +99,13 @@ def test_llama_cpp_reranker_reorders_results_and_keeps_full_content() -> None:
     reranker = LlamaCppReranker(model)
 
     ranked = reranker.rerank("find large implementation", _results(["alpha", "beta", full_content]), top_k=2)
+    system_prompt = model.calls[0]["messages"][0]["content"]
     prompt = model.calls[0]["messages"][1]["content"]
 
     assert [result.chunk.file_path for result in ranked] == ["src/file2.py", "src/file0.py"]
+    assert "canonical definitions, public APIs, and owner modules" in system_prompt
+    assert "Treat hybrid_score as a strong prior" in system_prompt
+    assert "most directly useful to least useful" in prompt
     assert full_content in prompt
 
 
