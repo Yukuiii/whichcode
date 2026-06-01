@@ -56,6 +56,23 @@ def test_hybrid_search_alpha_controls_weighting() -> None:
     assert semantic_first[0].chunk.file_path == "src/view.py"
 
 
+def test_hybrid_search_penalizes_lower_signal_paths() -> None:
+    """HybridIndex.search should demote tests when path penalties are enabled."""
+    chunks = [
+        Chunk("def impl(): pass", "src/impl.py", 1, 1, "function"),
+        Chunk("def impl(): pass", "tests/test_impl.py", 1, 1, "function"),
+    ]
+    model = FakeEmbeddingModel({"implementation": [0.0, 1.0]})
+    vector = VectorIndex.from_embeddings(chunks, [[1.0, 0.0], [0.0, 1.0]], model)
+    index = HybridIndex(bm25=build_bm25_index(chunks), vector=vector)
+
+    penalized = index.search("implementation", top_k=2, alpha=1.0)
+    raw = index.search("implementation", top_k=2, alpha=1.0, penalize_paths=False)
+
+    assert penalized[0].chunk.file_path == "src/impl.py"
+    assert raw[0].chunk.file_path == "tests/test_impl.py"
+
+
 def test_build_hybrid_index_builds_both_indexes() -> None:
     """build_hybrid_index should build BM25 and vector indexes from chunks."""
     chunk = Chunk("def run(): pass", "src/app.py", 1, 1, "function")
