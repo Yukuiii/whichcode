@@ -2,6 +2,7 @@
 
 from whichcode.bm25 import build_bm25_index, enrich_for_bm25, extract_search_terms, split_identifier, tokenize
 from whichcode.chunking import Chunk
+from whichcode.query_aliases import query_aliases
 
 
 def test_tokenize_splits_compound_identifiers() -> None:
@@ -34,6 +35,30 @@ def test_extract_search_terms_filters_noise_and_adds_stems() -> None:
     assert "cache" in terms
     assert "cachebuilder" in terms
     assert "builder" in terms
+
+
+def test_extract_search_terms_expands_query_aliases() -> None:
+    """extract_search_terms should expand common code abbreviations at query time."""
+    terms = extract_search_terms("ctx db req cfg opts", include_stop_words=True)
+
+    assert "ctx" in terms
+    assert "context" in terms
+    assert "db" in terms
+    assert "database" in terms
+    assert "req" in terms
+    assert "request" in terms
+    assert "cfg" in terms
+    assert "config" in terms
+    assert "configuration" in terms
+    assert "opts" in terms
+    assert "option" in terms
+    assert "options" in terms
+
+
+def test_query_aliases_returns_aliases_from_dedicated_module() -> None:
+    """query_aliases should expose the shared alias table outside BM25."""
+    assert query_aliases("ctx") == ("context",)
+    assert "cfg" in query_aliases("configuration")
 
 
 def test_enrich_for_bm25_adds_path_and_chunk_metadata() -> None:
@@ -82,6 +107,20 @@ def test_bm25_search_uses_file_path_terms() -> None:
 
     assert results
     assert results[0].chunk.file_path == "src/cache/store.py"
+
+
+def test_bm25_search_uses_query_aliases() -> None:
+    """BM25Index.search should expand short query aliases before scoring."""
+    chunks = [
+        Chunk("def current_context():\n    return context\n", "src/context.py", 1, 2, "function"),
+        Chunk("def render_template():\n    return html\n", "src/view.py", 1, 2, "function"),
+    ]
+    index = build_bm25_index(chunks)
+
+    results = index.search("ctx", top_k=1)
+
+    assert results
+    assert results[0].chunk.file_path == "src/context.py"
 
 
 def test_bm25_search_exposes_field_specific_scores() -> None:

@@ -11,6 +11,7 @@ from pathlib import Path
 import bm25s
 
 from whichcode.chunking import Chunk
+from whichcode.query_aliases import query_aliases
 from whichcode.types import SearchResult
 
 _CONTENT_FIELD_WEIGHT = 1.0
@@ -121,22 +122,38 @@ def extract_search_terms(
     *,
     stems: bool = True,
     include_stop_words: bool = False,
+    aliases: bool = True,
 ) -> list[str]:
     """Extract useful lexical terms from a natural-language or symbol query."""
     tokens: list[str] = []
     seen: set[str] = set()
-    for token in tokenize(query):
-        if len(token) < 3 or (not include_stop_words and token in _STOP_WORDS) or token in seen:
-            continue
+
+    def add_token(token: str) -> None:
+        """Append one accepted query term while preserving insertion order."""
+        if (
+            (len(token) < 3 and not query_aliases(token))
+            or (not include_stop_words and token in _STOP_WORDS)
+            or token in seen
+        ):
+            return
         seen.add(token)
         tokens.append(token)
+
+    for token in tokenize(query):
+        add_token(token)
 
     if stems:
         for token in list(tokens):
             for variant in stem_variants(token):
-                if variant not in seen and (include_stop_words or variant not in _STOP_WORDS):
-                    seen.add(variant)
-                    tokens.append(variant)
+                add_token(variant)
+
+    if aliases:
+        for token in list(tokens):
+            for alias in query_aliases(token):
+                if alias in seen or (not include_stop_words and alias in _STOP_WORDS):
+                    continue
+                seen.add(alias)
+                tokens.append(alias)
     return tokens
 
 
