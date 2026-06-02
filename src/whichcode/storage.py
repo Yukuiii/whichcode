@@ -40,12 +40,14 @@ def load_or_build_hybrid_index(
         return HybridIndex(
             bm25=build_bm25_index(chunks),
             vector=VectorIndex.from_embeddings(chunks, vectors, resolved_model),
+            graph=load_code_graph(root_path),
         )
 
     chunks = tuple(scan_chunks(root_path))
+    graph = build_code_graph(chunks)
     vector = build_vector_index(chunks, model=model)
-    save_chunks_and_vectors(root_path, chunks, vector.vectors)
-    return HybridIndex(bm25=build_bm25_index(chunks), vector=vector)
+    save_chunks_and_vectors(root_path, chunks, vector.vectors, graph=graph)
+    return HybridIndex(bm25=build_bm25_index(chunks), vector=vector, graph=graph)
 
 
 def index_exists(root: str | Path) -> bool:
@@ -63,22 +65,23 @@ def save_chunks_and_vectors(
     chunks: tuple[Chunk, ...],
     vectors: npt.NDArray[np.float32],
     *,
+    graph: CodeGraph | None = None,
     model_name: str = DEFAULT_EMBEDDING_MODEL,
 ) -> None:
     """Persist chunks and vectors under the user-level index directory."""
     root_path = _resolve_root(root)
     output_dir = index_dir(root_path)
     output_dir.mkdir(parents=True, exist_ok=True)
-    graph = build_code_graph(chunks)
+    resolved_graph = graph or build_code_graph(chunks)
     _write_chunks(output_dir / CHUNKS_FILE_NAME, chunks)
     np.save(output_dir / VECTORS_FILE_NAME, np.asarray(vectors, dtype=np.float32))
-    save_code_graph(output_dir / GRAPH_FILE_NAME, graph)
+    save_code_graph(output_dir / GRAPH_FILE_NAME, resolved_graph)
     _write_metadata(
         output_dir / METADATA_FILE_NAME,
         root_path,
         chunks,
         vectors,
-        graph,
+        resolved_graph,
         model_name,
     )
 

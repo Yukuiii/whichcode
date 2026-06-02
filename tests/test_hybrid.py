@@ -7,6 +7,7 @@ import numpy as np
 
 from whichcode.bm25 import build_bm25_index
 from whichcode.chunking import Chunk
+from whichcode.code_graph import build_code_graph
 from whichcode.hybrid import HybridIndex, build_hybrid_index
 from whichcode.types import SearchResult
 from whichcode.vector import VectorIndex
@@ -234,6 +235,40 @@ def test_hybrid_search_recalls_symbol_name_only_candidates() -> None:
     results = index.search("CacheBuilder", top_k=3, alpha=0.0)
 
     assert target in [result.chunk for result in results]
+
+
+def test_hybrid_search_expands_candidates_through_code_graph_references() -> None:
+    """HybridIndex.search should recall definition chunks referenced by strong seed chunks."""
+    caller = Chunk(
+        "def run():\n    return verify_token(token)\n",
+        "src/app.py",
+        1,
+        2,
+        "function",
+        name="run",
+        language="python",
+    )
+    definition = Chunk(
+        "def verify_token(token):\n    return token\n",
+        "src/auth.py",
+        1,
+        2,
+        "function",
+        name="verify_token",
+        language="python",
+    )
+    unrelated = Chunk("def other():\n    return 1\n", "src/other.py", 1, 2, "function", name="other", language="python")
+    chunks = [caller, definition, unrelated]
+    index = HybridIndex(
+        bm25=build_bm25_index(chunks),
+        vector=StaticSearchIndex([]),
+        graph=build_code_graph(chunks),
+    )
+
+    results = index.search("references run", top_k=2, alpha=0.0)
+
+    assert caller in [result.chunk for result in results]
+    assert definition in [result.chunk for result in results]
 
 
 def test_hybrid_search_limits_name_noise_for_natural_language_queries() -> None:

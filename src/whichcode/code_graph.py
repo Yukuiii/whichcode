@@ -78,11 +78,11 @@ def build_code_graph(chunks: Sequence[Chunk]) -> CodeGraph:
     edges: dict[tuple[str, str, str], GraphEdge] = {}
 
     for file_path in file_paths:
-        _add_node(nodes, GraphNode(_file_id(file_path), "file", file_path, file_path=file_path))
+        _add_node(nodes, GraphNode(file_node_id(file_path), "file", file_path, file_path=file_path))
 
     for chunk in resolved_chunks:
-        file_id = _file_id(chunk.file_path)
-        chunk_id = _chunk_id(chunk)
+        file_id = file_node_id(chunk.file_path)
+        chunk_id = chunk_node_id(chunk)
         _add_node(
             nodes,
             GraphNode(
@@ -163,6 +163,21 @@ def load_code_graph(path: Path) -> CodeGraph:
     )
 
 
+def file_node_id(file_path: str) -> str:
+    """Return a stable graph node id for a file."""
+    return f"file:{file_path}"
+
+
+def chunk_node_id(chunk: Chunk) -> str:
+    """Return a stable graph node id for a chunk."""
+    return f"chunk:{chunk.file_path}:{chunk.start_line}:{chunk.end_line}:{chunk.kind}:{chunk.name or ''}"
+
+
+def identifier_node_id(identifier: str) -> str:
+    """Return a stable graph node id for an identifier reference."""
+    return f"identifier:{identifier.lower()}"
+
+
 def _initialize_schema(connection: sqlite3.Connection) -> None:
     """Create graph tables and clear previous generated graph rows."""
     connection.executescript(
@@ -229,7 +244,7 @@ def _add_import_edges(
         _add_edge(edges, file_id, module_id, "imports", _IMPORT_MODULE_CONFIDENCE)
         target_file = _resolve_import_target(chunk.file_path, module, file_path_set, module_file_map)
         if target_file is not None:
-            _add_edge(edges, file_id, _file_id(target_file), "imports", _IMPORT_FILE_CONFIDENCE)
+            _add_edge(edges, file_id, file_node_id(target_file), "imports", _IMPORT_FILE_CONFIDENCE)
 
 
 def _add_identifier_edges(
@@ -429,16 +444,6 @@ def _file_candidates(base: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(candidate for candidate in candidates if candidate and candidate != "."))
 
 
-def _file_id(file_path: str) -> str:
-    """Return a stable graph node id for a file."""
-    return f"file:{file_path}"
-
-
-def _chunk_id(chunk: Chunk) -> str:
-    """Return a stable graph node id for a chunk."""
-    return f"chunk:{chunk.file_path}:{chunk.start_line}:{chunk.end_line}:{chunk.kind}:{chunk.name or ''}"
-
-
 def _symbol_id(file_path: str, name: str) -> str:
     """Return a stable graph node id for a symbol definition."""
     return f"symbol:{file_path}:{name}"
@@ -451,4 +456,4 @@ def _module_id(module: str) -> str:
 
 def _identifier_id(identifier: str) -> str:
     """Return a stable graph node id for an identifier reference."""
-    return f"identifier:{identifier.lower()}"
+    return identifier_node_id(identifier)

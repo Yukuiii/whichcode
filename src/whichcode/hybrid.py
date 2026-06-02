@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from whichcode.bm25 import BM25Index, build_bm25_index, extract_search_terms
 from whichcode.chunking import Chunk
+from whichcode.code_graph import CodeGraph, build_code_graph, chunk_node_id, file_node_id
 from whichcode.ranking_rules import (
     ParsedQuery,
     apply_path_prior,
@@ -25,6 +26,14 @@ _FILE_COHERENCE_BOOST_FRACTION = 0.15
 _FILE_SATURATION_THRESHOLD = 1
 _FILE_SATURATION_DECAY = 0.65
 _TINY_QUERY_BOOST = 1e-12
+_GRAPH_SEED_COUNT = 20
+_GRAPH_IMPORT_BOOST = 0.22
+_GRAPH_DEFINITION_BOOST = 0.35
+_GRAPH_REFERENCE_BOOST = 0.16
+_GRAPH_QUERY_RE = re.compile(
+    r"\b(imports?|dependencies|dependency|call graph|called by|callers?|callees?|references?|related files?|related code)\b",
+    re.IGNORECASE,
+)
 _SYMBOL_QUERY_RE = re.compile(
     r"^(?:"
     r"[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\\|->|\.)[A-Za-z_][A-Za-z0-9_]*)+"
@@ -66,6 +75,13 @@ class HybridIndex:
 
     bm25: BM25Index
     vector: VectorIndex
+    graph: CodeGraph | None = None
+    graph_lookup: _GraphLookup | None = None
+
+    def __post_init__(self) -> None:
+        """Build graph lookup data once for repeated searches."""
+        if self.graph is not None and self.graph_lookup is None:
+            object.__setattr__(self, "graph_lookup", _build_graph_lookup(self.graph, _index_chunks(self.bm25, self.vector)))
 
     @classmethod
     def from_chunks(cls, chunks: Sequence[Chunk], model: EmbeddingModel | None = None) -> HybridIndex:
@@ -74,6 +90,7 @@ class HybridIndex:
         return cls(
             bm25=build_bm25_index(resolved_chunks),
             vector=build_vector_index(resolved_chunks, model=model),
+            graph=build_code_graph(resolved_chunks),
         )
 
     def search(
@@ -108,6 +125,8 @@ class HybridIndex:
                 (channel_weights.symbol, _rank_symbol_definitions(all_chunks, parsed_query, candidate_count)),
             )
         )
+        if _should_expand_graph(search_query):
+            _apply_graph_expansion(channel_scores, self.graph_lookup)
         candidates = [
             chunk
             for chunk in sorted(channel_scores, key=lambda chunk: (chunk.file_path, chunk.start_line))
@@ -181,6 +200,104 @@ def _index_chunks(*indexes: object) -> tuple[Chunk, ...]:
         if chunks:
             return tuple(chunks)
     return ()
+
+
+def _apply_graph_expansion(scores: dict[Chunk, float], lookup: _GraphLookup | None) -> None:
+    """Add low-weight one-hop graph neighbors to the candidate score map."""
+    if lookup is None or not scores:
+        return
+
+    seed_chunks = sorted(scores, key=lambda chunk: scores[chunk], reverse=True)[:_GRAPH_SEED_COUNT]
+    for seed in seed_chunks:
+        seed_score = scores.get(seed, 0.0)
+        if seed_score <= 0.0:
+            continue
+        seed_chunk_id = chunk_node_id(seed)
+        seed_file_id = file_node_id(seed.file_path)
+        for related_file_id in lookup.import_neighbors_by_file.get(seed_file_id, ()):
+            for chunk in lookup.chunks_by_file_id.get(related_file_id, ()):
+                _add_graph_score(scores, chunk, seed_score * _GRAPH_IMPORT_BOOST)
+        for identifier in lookup.references_by_chunk.get(seed_chunk_id, ()):
+            for chunk in lookup.definitions_by_identifier.get(identifier, ()):
+                _add_graph_score(scores, chunk, seed_score * _GRAPH_DEFINITION_BOOST)
+        for identifier in lookup.definitions_by_chunk.get(seed_chunk_id, ()):
+            for chunk in lookup.references_by_identifier.get(identifier, ()):
+                _add_graph_score(scores, chunk, seed_score * _GRAPH_REFERENCE_BOOST)
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphLookup:
+    """Stores graph lookup maps used for one-hop candidate expansion."""
+
+    chunks_by_file_id: dict[str, tuple[Chunk, ...]]
+    import_neighbors_by_file: dict[str, tuple[str, ...]]
+    definitions_by_identifier: dict[str, tuple[Chunk, ...]]
+    references_by_identifier: dict[str, tuple[Chunk, ...]]
+    definitions_by_chunk: dict[str, tuple[str, ...]]
+    references_by_chunk: dict[str, tuple[str, ...]]
+
+
+def _build_graph_lookup(graph: CodeGraph, chunks: Sequence[Chunk]) -> _GraphLookup | None:
+    """Build file, definition, and reference lookup maps from a code graph."""
+    chunk_by_id = {chunk_node_id(chunk): chunk for chunk in chunks}
+    node_by_id = {node.id: node for node in graph.nodes}
+    chunks_by_file: dict[str, list[Chunk]] = {}
+    import_neighbors: dict[str, set[str]] = {}
+    definitions_by_identifier: dict[str, list[Chunk]] = {}
+    references_by_identifier: dict[str, list[Chunk]] = {}
+    definitions_by_chunk: dict[str, set[str]] = {}
+    references_by_chunk: dict[str, set[str]] = {}
+
+    for chunk in chunks:
+        chunks_by_file.setdefault(file_node_id(chunk.file_path), []).append(chunk)
+
+    for edge in graph.edges:
+        source_node = node_by_id.get(edge.source_id)
+        target_node = node_by_id.get(edge.target_id)
+        if source_node is None or target_node is None:
+            continue
+        if edge.kind == "imports" and source_node.kind == "file" and target_node.kind == "file":
+            import_neighbors.setdefault(edge.source_id, set()).add(edge.target_id)
+            import_neighbors.setdefault(edge.target_id, set()).add(edge.source_id)
+        elif edge.kind == "defines" and source_node.kind == "chunk" and target_node.kind == "symbol":
+            chunk = chunk_by_id.get(edge.source_id)
+            if chunk is None:
+                continue
+            for identifier in _graph_identifier_terms(target_node.label):
+                definitions_by_identifier.setdefault(identifier, []).append(chunk)
+                definitions_by_chunk.setdefault(edge.source_id, set()).add(identifier)
+        elif edge.kind == "references" and source_node.kind == "chunk" and target_node.kind == "identifier":
+            chunk = chunk_by_id.get(edge.source_id)
+            if chunk is None:
+                continue
+            identifier = target_node.label.lower()
+            references_by_identifier.setdefault(identifier, []).append(chunk)
+            references_by_chunk.setdefault(edge.source_id, set()).add(identifier)
+
+    if not import_neighbors and not definitions_by_identifier and not references_by_identifier:
+        return None
+    return _GraphLookup(
+        chunks_by_file_id={key: tuple(value) for key, value in chunks_by_file.items()},
+        import_neighbors_by_file={key: tuple(sorted(value)) for key, value in import_neighbors.items()},
+        definitions_by_identifier={key: tuple(dict.fromkeys(value)) for key, value in definitions_by_identifier.items()},
+        references_by_identifier={key: tuple(dict.fromkeys(value)) for key, value in references_by_identifier.items()},
+        definitions_by_chunk={key: tuple(sorted(value)) for key, value in definitions_by_chunk.items()},
+        references_by_chunk={key: tuple(sorted(value)) for key, value in references_by_chunk.items()},
+    )
+
+
+def _graph_identifier_terms(text: str) -> tuple[str, ...]:
+    """Return normalized identifier terms for graph symbol matching."""
+    return tuple(
+        dict.fromkeys(extract_search_terms(text, stems=False, include_stop_words=True, aliases=False))
+    )
+
+
+def _add_graph_score(scores: dict[Chunk, float], chunk: Chunk, score: float) -> None:
+    """Add a graph-derived score without lowering an existing candidate score."""
+    if score <= 0.0:
+        return
+    scores[chunk] = max(scores.get(chunk, 0.0), score)
 
 
 def _rank_symbol_definitions(chunks: Sequence[Chunk], query: ParsedQuery, top_k: int) -> list[SearchResult]:
@@ -260,6 +377,11 @@ def _has_identifier_hint(query: str) -> bool:
 def _is_question_query(query: str) -> bool:
     """Return whether a query looks like an architecture or behavior question."""
     return _QUESTION_QUERY_RE.search(query) is not None
+
+
+def _should_expand_graph(query: str) -> bool:
+    """Return whether a query explicitly asks for code relationships."""
+    return _GRAPH_QUERY_RE.search(query) is not None
 
 
 def _apply_path_penalty(chunk: Chunk, score: float, penalize_paths: bool, query: str) -> float:
