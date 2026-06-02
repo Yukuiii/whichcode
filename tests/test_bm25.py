@@ -39,7 +39,7 @@ def test_extract_search_terms_filters_noise_and_adds_stems() -> None:
 
 def test_extract_search_terms_expands_query_aliases() -> None:
     """extract_search_terms should expand common code abbreviations at query time."""
-    terms = extract_search_terms("ctx db req cfg opts", include_stop_words=True)
+    terms = extract_search_terms("ctx db req cfg opts fn cmd tx hdr spec", include_stop_words=True)
 
     assert "ctx" in terms
     assert "context" in terms
@@ -53,12 +53,28 @@ def test_extract_search_terms_expands_query_aliases() -> None:
     assert "opts" in terms
     assert "option" in terms
     assert "options" in terms
+    assert "fn" in terms
+    assert "function" in terms
+    assert "cmd" in terms
+    assert "command" in terms
+    assert "tx" in terms
+    assert "transaction" in terms
+    assert "hdr" in terms
+    assert "header" in terms
+    assert "headers" in terms
+    assert "spec" in terms
+    assert "test" in terms
 
 
 def test_query_aliases_returns_aliases_from_dedicated_module() -> None:
     """query_aliases should expose the shared alias table outside BM25."""
     assert query_aliases("ctx") == ("context",)
     assert "cfg" in query_aliases("configuration")
+    assert "endpoint" in query_aliases("api")
+    assert "repository" in query_aliases("dao")
+    assert "filesystem" in query_aliases("fs")
+    assert "serde" in query_aliases("deserialize")
+    assert "validator" in query_aliases("validation")
 
 
 def test_enrich_for_bm25_adds_path_and_chunk_metadata() -> None:
@@ -121,6 +137,20 @@ def test_bm25_search_uses_query_aliases() -> None:
 
     assert results
     assert results[0].chunk.file_path == "src/context.py"
+
+
+def test_bm25_search_uses_structural_query_aliases() -> None:
+    """BM25Index.search should use structural aliases for source-code vocabulary."""
+    chunks = [
+        Chunk("function buildCommand() { return run(); }", "src/commands/build.ts", 1, 1, "function"),
+        Chunk("class View { render() {} }", "src/view.ts", 1, 1, "class"),
+    ]
+    index = build_bm25_index(chunks)
+
+    results = index.search("fn cmd", top_k=1)
+
+    assert results
+    assert results[0].chunk.file_path == "src/commands/build.ts"
 
 
 def test_bm25_search_exposes_field_specific_scores() -> None:
