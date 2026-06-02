@@ -33,6 +33,15 @@ _SYMBOL_QUERY_RE = re.compile(
     r"|[A-Z][A-Za-z0-9]*"
     r")$"
 )
+_IDENTIFIER_HINT_RE = re.compile(
+    r"(?:"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:(?:::|\\|->|\.)[A-Za-z_][A-Za-z0-9_]*)+"
+    r"|[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+"
+    r"|[A-Za-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*"
+    r"|[A-Z]{2,}[A-Za-z0-9]*"
+    r")"
+)
+_QUESTION_QUERY_RE = re.compile(r"^\s*(?:how|what|why|where|when|which|who|explain|describe)\b", re.IGNORECASE)
 _ALPHA_SYMBOL = 0.3
 _ALPHA_NATURAL_LANGUAGE = 0.5
 _SYMBOL_DEFINITION_KINDS = frozenset(
@@ -231,12 +240,26 @@ def _resolve_channel_weights(query: str, alpha: float | None) -> _ChannelWeights
         )
     if _is_symbol_query(query):
         return _ChannelWeights(content=1.5, vector=0.4, name=2.5, path=1.2, symbol=2.5)
-    return _ChannelWeights(content=1.2, vector=1.0, name=1.0, path=1.0, symbol=0.8)
+    if _has_identifier_hint(query):
+        return _ChannelWeights(content=1.1, vector=1.0, name=1.2, path=1.2, symbol=1.0)
+    if _is_question_query(query):
+        return _ChannelWeights(content=1.3, vector=1.3, name=0.2, path=0.9, symbol=0.2)
+    return _ChannelWeights(content=1.2, vector=1.15, name=0.25, path=1.4, symbol=0.2)
 
 
 def _is_symbol_query(query: str) -> bool:
     """Return whether the query looks like a bare code symbol."""
     return _SYMBOL_QUERY_RE.match(query.strip()) is not None
+
+
+def _has_identifier_hint(query: str) -> bool:
+    """Return whether a natural-language query contains an explicit code identifier."""
+    return _IDENTIFIER_HINT_RE.search(query) is not None
+
+
+def _is_question_query(query: str) -> bool:
+    """Return whether a query looks like an architecture or behavior question."""
+    return _QUESTION_QUERY_RE.search(query) is not None
 
 
 def _apply_path_penalty(chunk: Chunk, score: float, penalize_paths: bool, query: str) -> float:

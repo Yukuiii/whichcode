@@ -234,3 +234,28 @@ def test_hybrid_search_recalls_symbol_name_only_candidates() -> None:
     results = index.search("CacheBuilder", top_k=3, alpha=0.0)
 
     assert target in [result.chunk for result in results]
+
+
+def test_hybrid_search_limits_name_noise_for_natural_language_queries() -> None:
+    """HybridIndex.search should not let generic method names dominate prose queries."""
+    specific_chunk = Chunk(
+        "def parse_options(argv):\n    return resolve_short_and_long_options(argv)",
+        "src/parser.py",
+        1,
+        2,
+        "function",
+        name="parse_options",
+    )
+    noisy_name_chunk = Chunk(
+        "def unrelated(value):\n    return value",
+        "src/core.py",
+        1,
+        2,
+        "function",
+        name="OptionParserLongShortResolutionValue",
+    )
+    index = HybridIndex(bm25=build_bm25_index([noisy_name_chunk, specific_chunk]), vector=StaticSearchIndex([]))
+
+    results = index.search("option parser and long short option resolution", top_k=2)
+
+    assert results[0].chunk == specific_chunk
