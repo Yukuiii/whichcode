@@ -12,6 +12,9 @@ import numpy.typing as npt
 
 from whichcode.bm25 import build_bm25_index
 from whichcode.chunking import Chunk
+from whichcode.code_graph import CodeGraph, build_code_graph
+from whichcode.code_graph import load_code_graph as _load_code_graph_file
+from whichcode.code_graph import save_code_graph
 from whichcode.hybrid import HybridIndex
 from whichcode.paths import project_index_dir, project_index_key
 from whichcode.scanner import scan_chunks
@@ -19,8 +22,8 @@ from whichcode.vector import DEFAULT_EMBEDDING_MODEL, EmbeddingModel, VectorInde
 
 CHUNKS_FILE_NAME = "chunks.jsonl"
 VECTORS_FILE_NAME = "vectors.npy"
+GRAPH_FILE_NAME = "graph.sqlite"
 METADATA_FILE_NAME = "metadata.json"
-INDEX_VERSION = 6
 
 
 def load_or_build_hybrid_index(
@@ -66,13 +69,16 @@ def save_chunks_and_vectors(
     root_path = _resolve_root(root)
     output_dir = index_dir(root_path)
     output_dir.mkdir(parents=True, exist_ok=True)
+    graph = build_code_graph(chunks)
     _write_chunks(output_dir / CHUNKS_FILE_NAME, chunks)
     np.save(output_dir / VECTORS_FILE_NAME, np.asarray(vectors, dtype=np.float32))
+    save_code_graph(output_dir / GRAPH_FILE_NAME, graph)
     _write_metadata(
         output_dir / METADATA_FILE_NAME,
         root_path,
         chunks,
         vectors,
+        graph,
         model_name,
     )
 
@@ -88,6 +94,19 @@ def load_chunks_and_vectors(root: str | Path) -> tuple[tuple[Chunk, ...], npt.ND
     if len(chunks) != vectors.shape[0]:
         raise ValueError("persisted chunks and vectors have different lengths")
     return chunks, vectors
+
+
+def load_code_graph(root: str | Path) -> CodeGraph:
+    """Load the persisted code graph for a project root."""
+    root_path = _resolve_root(root)
+    graph_path = index_dir(root_path) / GRAPH_FILE_NAME
+    if graph_path.exists():
+        return _load_code_graph_file(graph_path)
+
+    chunks, _ = load_chunks_and_vectors(root_path)
+    graph = build_code_graph(chunks)
+    save_code_graph(graph_path, graph)
+    return graph
 
 
 def index_dir(root: str | Path) -> Path:
@@ -118,7 +137,7 @@ def _metadata_matches(path: Path, root: str | Path) -> bool:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return metadata.get("version") == INDEX_VERSION and metadata.get("root_path_sha256") == project_index_key(root)
+    return metadata.get("root_path_sha256") == project_index_key(root)
 
 
 def _write_chunks(path: Path, chunks: tuple[Chunk, ...]) -> None:
@@ -143,17 +162,19 @@ def _write_metadata(
     root: Path,
     chunks: tuple[Chunk, ...],
     vectors: npt.NDArray[np.float32],
+    graph: CodeGraph,
     model_name: str,
 ) -> None:
     """Write metadata for a persisted index."""
     metadata = {
-        "version": INDEX_VERSION,
         "root_path": str(root),
         "root_path_sha256": project_index_key(root),
         "created_at": time.time(),
         "model_name": model_name,
         "chunk_count": len(chunks),
         "vector_shape": list(vectors.shape),
+        "graph_node_count": len(graph.nodes),
+        "graph_edge_count": len(graph.edges),
     }
     path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
